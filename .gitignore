@@ -15,6 +15,7 @@ data/
 *.log
 backups/
 .local-migration-done
+node_modules/
 
 # Generated archives and local source files
 *.zip

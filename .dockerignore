@@ -17,6 +17,7 @@ data
 .idea
 .vscode
 tests
+node_modules
 start-mac.command
 start-windows.bat
 WINDOWS-DEPLOY.md

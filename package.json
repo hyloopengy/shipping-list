@@ -1,0 +1,10 @@
+{
+  "name": "shipping-list-frontend-tests",
+  "private": true,
+  "scripts": {
+    "test:frontend": "node --test tests/frontend.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}

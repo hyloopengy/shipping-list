@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>发货清单</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260722-1') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='tweaks.css', v='20260722-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260722-2') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='tweaks.css', v='20260722-2') }}">
 </head>
 <body>
   <header class="topbar">
@@ -51,8 +51,8 @@
           <div class="sku-entry">
             <label>款色尺码</label>
             <div class="search-wrap">
-              <input id="skuSearch" autocomplete="off" placeholder="例如：001 xl；空格分隔多个关键词">
-              <div id="suggestions" class="suggestions" hidden></div>
+              <input id="skuSearch" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="suggestions" placeholder="点击展开；可输入 001 xl 等多个关键词">
+              <div id="suggestions" class="suggestions" role="listbox" hidden></div>
             </div>
             <label class="qty-label">数量 <span id="qtyReference" class="muted"></span><input id="skuQty" type="number" min="1" placeholder="先选择款色尺码"></label>
             <button id="addSku" class="secondary">添加</button>
@@ -122,6 +122,6 @@
   </dialog>
 
   <div id="toast" class="toast"></div>
-  <script src="{{ url_for('static', filename='app.js', v='20260722-1') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20260722-2') }}"></script>
 </body>
 </html>

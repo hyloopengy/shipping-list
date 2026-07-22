@@ -159,6 +159,24 @@ class PackingFlowTest(unittest.TestCase):
         self.assertIsNone(package["length_cm"])
         self.assertIsNone(package["weight_kg"])
 
+    def test_home_security_and_history_search(self):
+        home = self.client.get("/")
+        self.assertEqual(home.status_code, 200)
+        self.assertEqual(home.headers["X-Frame-Options"], "DENY")
+        self.assertIn("frame-ancestors 'none'", home.headers["Content-Security-Policy"])
+        page = home.get_data(as_text=True)
+        self.assertIn('id="batchSearchBtn"', page)
+        self.assertIn('role="combobox"', page)
+        self.assertIn('aria-controls="suggestions"', page)
+
+        created = [self.import_source(f"历史查询-{number}") for number in range(5)]
+        prefix = created[0]["batch"]["batch_no"].split("-")[0]
+        history = self.client.get(f"/api/batches?q={prefix}").get_json()
+        latest = self.client.get("/api/batches").get_json()
+        self.assertGreaterEqual(len(history), 5)
+        self.assertLessEqual(len(history), 100)
+        self.assertLessEqual(len(latest), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
