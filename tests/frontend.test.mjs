@@ -74,6 +74,10 @@ test('款色尺码支持点击展开、多关键词匹配、选择、扣减和�
   window.document.getElementById('addSku').click();
   assert.match(window.document.getElementById('itemRows').textContent, /001 T恤 A001 黑色 XL/);
   assert.equal(window.document.getElementById('boxTotal').textContent, '2');
+  assert.equal(window.document.getElementById('suggestions').hidden, true);
+  assert.equal(input.getAttribute('aria-expanded'), 'false');
+
+  input.dispatchEvent(new window.Event('focus'));
   assert.match(window.document.getElementById('suggestions').textContent, /当前参考库存 3/);
 
   window.removeItem(0);
@@ -107,6 +111,9 @@ test('批次只在点击查询后搜索历史，并显示大包缺失重量', as
   });
 
   const search = window.document.getElementById('batchSearch');
+  const exportLink = window.document.getElementById('exportBtn');
+  assert.equal(exportLink.getAttribute('href'), '/api/batches/1/export');
+  assert.equal(exportLink.getAttribute('download'), '发货清单_20260722-001.xlsx');
   search.value = '20260720';
   search.dispatchEvent(new window.Event('input', { bubbles: true }));
   assert.equal(calls.includes('/api/batches?q=20260720'), false);

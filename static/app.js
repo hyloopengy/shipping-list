@@ -18,7 +18,7 @@ async function loadBatch(id){ state.data=await api(`/api/batches/${id}`); state.
 function renderAll(){
   const {batch,summary}=state.data; $('batchMeta').textContent=`内部单号：${batch.internal_order||'未填写'} · ${batch.source_filename}`;
   $('mPackages').textContent=summary.packages; $('mPacked').textContent=summary.packed; $('mRemaining').textContent=summary.remaining; $('mOver').textContent=summary.over;
-  $('exportBtn').href=`/api/batches/${batch.id}/export`; renderPackages(); renderDiff(); renderItems();
+  $('exportBtn').href=`/api/batches/${batch.id}/export`;$('exportBtn').download=`发货清单_${batch.batch_no}.xlsx`; renderPackages(); renderDiff(); renderItems();
 }
 function renderPackages(){
   const list=$('packageList'); $('packageHint').textContent=`${state.data.packages.length}个大包`;
@@ -56,7 +56,7 @@ function addSelected(){
   if(!state.selectedSku){toast('请先选择款色尺码',true);$('skuSearch').focus();return;}
   const qty=Number($('skuQty').value); if(!Number.isInteger(qty)||qty<1){toast('数量请输入大于0的整数',true);$('skuQty').focus();return;}
   const old=state.items.find(x=>x.sku_id===state.selectedSku.id); if(old)old.quantity+=qty;else state.items.push({sku_id:state.selectedSku.id,label:state.selectedSku.display_label,quantity:qty});
-  state.selectedSku=null;$('skuSearch').value='';$('skuQty').value='';renderItems();refreshQuantityReference();searchSku('');$('skuSearch').focus();
+  state.selectedSku=null;state.matches=[];$('skuSearch').value='';$('skuQty').value='';renderItems();refreshQuantityReference();$('skuSearch').focus();closeSuggestions();
 }
 function packagePayload(force=false){ return {package_no:$('packageNo').value,clone_count:state.editingId?1:$('cloneCount').value,length_cm:$('lengthCm').value,width_cm:$('widthCm').value,height_cm:$('heightCm').value,weight_kg:$('weightKg').value,items:state.items.map(({sku_id,quantity})=>({sku_id,quantity})),force}; }
 async function save(force=false){
@@ -74,6 +74,7 @@ window.deletePackage=async(id,label)=>{if(!confirm(`确定清空并删除 ${labe
 function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 
 $('newBatchBtn').onclick=openImport;$('batchSelect').onchange=e=>{if(e.target.value)loadBatch(Number(e.target.value))};$('savePackage').onclick=()=>save(false);$('forceSave').onclick=()=>save(true);$('addSku').onclick=addSelected;$('cancelEdit').onclick=()=>resetEditor(false);$('diffSearch').oninput=renderDiff;
+$('exportBtn').onclick=e=>{if(!state.data){e.preventDefault();toast('请先选择批次',true);return;}toast(`已开始下载：${$('exportBtn').download}，请查看浏览器下载记录`);};
 async function searchBatches(){const query=$('batchSearch').value.trim();if(!query){await loadBatches(state.data?.batch?.id);return;}const token=++state.batchSearchToken;const rows=await api(`/api/batches?q=${encodeURIComponent(query)}`);if(token!==state.batchSearchToken)return;if(!rows.length){toast('没有找到匹配的历史批次',true);return;}state.batches=rows;$('batchSelect').innerHTML=rows.map(b=>`<option value="${b.id}">${b.batch_no}</option>`).join('');$('batchSelect').value=rows[0].id;await loadBatch(rows[0].id);toast(`找到 ${rows.length} 个历史批次`);}
 $('batchSearchBtn').onclick=()=>searchBatches().catch(e=>toast(e.message,true));$('batchSearch').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();searchBatches().catch(err=>toast(err.message,true));}};
 $('skuSearch').oninput=e=>{state.selectedSku=null;refreshQuantityReference();searchSku(e.target.value)};
