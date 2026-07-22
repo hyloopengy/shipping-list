@@ -159,6 +159,131 @@ class PackingFlowTest(unittest.TestCase):
         self.assertIsNone(package["length_cm"])
         self.assertIsNone(package["weight_kg"])
 
+    def test_batch_ratios_mixed_package_snapshot_and_excel(self):
+        imported = self.import_source("配比测试")
+        batch_id = imported["batch"]["id"]
+        first, second = imported["skus"][:2]
+        ratio_response = self.client.post(
+            f"/api/batches/{batch_id}/ratios",
+            json={"items": [
+                {"sku_id": first["id"], "quantity": 1},
+                {"sku_id": first["id"], "quantity": 1},
+                {"sku_id": second["id"], "quantity": 1},
+            ]},
+            headers=self.csrf,
+        )
+        self.assertEqual(ratio_response.status_code, 201, ratio_response.get_json())
+        ratio = ratio_response.get_json()
+        self.assertEqual(ratio["name"], "配比1")
+        self.assertEqual(ratio["units_per_pack"], 3)
+        self.assertEqual(ratio["items"][0]["quantity"], 2)
+
+        created = self.client.post(
+            f"/api/batches/{batch_id}/packages",
+            json={
+                "package_no": 30, "clone_count": 2,
+                "entries": [
+                    {"entry_type": "sku", "sku_id": first["id"], "pack_count": 1},
+                    {"entry_type": "ratio", "ratio_id": ratio["id"], "pack_count": 2},
+                ],
+            },
+            headers=self.csrf,
+        )
+        self.assertEqual(created.status_code, 201, created.get_json())
+        self.assertEqual(created.get_json()["created"], ["30#", "31#"])
+        data = created.get_json()["data"]
+        self.assertEqual(data["summary"]["packed"], 14)
+
+        package = next(row for row in data["packages"] if row["package_no"] == 30)
+        detail = self.client.get(f'/api/packages/{package["id"]}').get_json()
+        self.assertEqual(len(detail["entries"]), 2)
+        ratio_entry = next(row for row in detail["entries"] if row["entry_type"] == "ratio")
+        self.assertEqual(ratio_entry["units_per_pack"], 3)
+        self.assertEqual(ratio_entry["pack_count"], 2)
+        self.assertEqual(ratio_entry["total_quantity"], 6)
+
+        changed_ratio = self.client.put(
+            f'/api/ratios/{ratio["id"]}',
+            json={"items": [{"sku_id": first["id"], "quantity": 1}]},
+            headers=self.csrf,
+        )
+        self.assertEqual(changed_ratio.status_code, 200, changed_ratio.get_json())
+        self.assertEqual(changed_ratio.get_json()["units_per_pack"], 1)
+        snapshot = self.client.get(f'/api/packages/{package["id"]}').get_json()
+        old_ratio_entry = next(row for row in snapshot["entries"] if row["entry_type"] == "ratio")
+        self.assertEqual(old_ratio_entry["units_per_pack"], 3)
+        self.assertIn(f'{second["display_label"]}×1', old_ratio_entry["label"])
+
+        export = self.client.get(f"/api/batches/{batch_id}/export")
+        self.assertEqual(export.status_code, 200)
+        book = load_workbook(io.BytesIO(export.data), data_only=True)
+        sheet = book["发货清单"]
+        self.assertEqual(sheet["B5"].value, "款色尺码/配比明细")
+        self.assertEqual(sheet["D5"].value, "中包件数")
+        self.assertEqual(sheet["E5"].value, "中包数量")
+        rows = list(sheet.iter_rows(min_row=6, values_only=True))
+        ratio_rows = [row for row in rows if row[1] and str(row[1]).startswith("配比1：")]
+        self.assertEqual(ratio_rows[0][2:6], (None, 3, 2, 6))
+        self.assertNotIn("\n", str(ratio_rows[0][1]))
+        self.assertIn("；", str(ratio_rows[0][1]))
+        ratio_row_number = next(index for index in range(6, sheet.max_row + 1) if sheet.cell(index, 2).value == ratio_rows[0][1])
+        self.assertGreaterEqual(sheet.row_dimensions[ratio_row_number].height, 36)
+
+        deleted_ratio = self.client.delete(f'/api/ratios/{ratio["id"]}', headers=self.csrf)
+        self.assertEqual(deleted_ratio.status_code, 200)
+        current_batch = self.client.get(f"/api/batches/{batch_id}").get_json()
+        self.assertEqual(current_batch["ratios"], [])
+        preserved = self.client.get(f'/api/packages/{package["id"]}').get_json()
+        self.assertEqual(next(row for row in preserved["entries"] if row["entry_type"] == "ratio")["units_per_pack"], 3)
+
+        deleted_package = self.client.delete(f'/api/packages/{package["id"]}', headers=self.csrf)
+        self.assertEqual(deleted_package.status_code, 200)
+        self.assertEqual(deleted_package.get_json()["data"]["summary"]["packed"], 7)
+
+    def test_ratio_batch_isolation_and_validation(self):
+        first_batch = self.import_source("配比隔离1")
+        second_batch = self.import_source("配比隔离2")
+        response = self.client.post(
+            f'/api/batches/{second_batch["batch"]["id"]}/ratios',
+            json={"items": [{"sku_id": first_batch["skus"][0]["id"], "quantity": 1}]},
+            headers=self.csrf,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("不属于当前批次", response.get_json()["error"])
+        empty = self.client.post(
+            f'/api/batches/{second_batch["batch"]["id"]}/ratios', json={"items": []}, headers=self.csrf,
+        )
+        self.assertEqual(empty.status_code, 400)
+        self.assertIn("至少", empty.get_json()["error"])
+        malformed_ratio = self.client.post(
+            f'/api/batches/{second_batch["batch"]["id"]}/ratios', json={"items": ["<script>"]}, headers=self.csrf,
+        )
+        self.assertEqual(malformed_ratio.status_code, 400)
+        malformed_package = self.client.post(
+            f'/api/batches/{second_batch["batch"]["id"]}/packages', json=["not-an-object"], headers=self.csrf,
+        )
+        self.assertEqual(malformed_package.status_code, 400)
+
+        local_sku = second_batch["skus"][0]
+        ratio = self.client.post(
+            f'/api/batches/{second_batch["batch"]["id"]}/ratios',
+            json={"items": [{"sku_id": local_sku["id"], "quantity": 7}]}, headers=self.csrf,
+        ).get_json()
+        ratio_package = {
+            "package_no": 50, "clone_count": 1,
+            "entries": [{"entry_type": "ratio", "ratio_id": ratio["id"], "pack_count": 2}],
+        }
+        warning = self.client.post(
+            f'/api/batches/{second_batch["batch"]["id"]}/packages', json=ratio_package, headers=self.csrf,
+        )
+        self.assertEqual(warning.status_code, 409)
+        self.assertEqual(warning.get_json()["overages"][0]["added"], 14)
+        forced = self.client.post(
+            f'/api/batches/{second_batch["batch"]["id"]}/packages',
+            json=ratio_package | {"force": True}, headers=self.csrf,
+        )
+        self.assertEqual(forced.status_code, 201, forced.get_json())
+
     def test_home_security_and_history_search(self):
         home = self.client.get("/")
         self.assertEqual(home.status_code, 200)

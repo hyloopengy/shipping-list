@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>发货清单</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260722-3') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='tweaks.css', v='20260722-3') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260722-6') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='tweaks.css', v='20260722-6') }}">
 </head>
 <body>
   <header class="topbar">
@@ -56,11 +56,12 @@
             </div>
             <label class="qty-label">数量 <span id="qtyReference" class="muted"></span><input id="skuQty" type="number" min="1" placeholder="先选择款色尺码"></label>
             <button id="addSku" class="secondary">添加</button>
+            <button id="ratioManagerBtn" class="ghost" type="button">配比管理</button>
           </div>
 
           <div class="items-wrap">
             <table>
-              <thead><tr><th>款色尺码</th><th>数量</th><th></th></tr></thead>
+              <thead><tr><th>款色尺码/配比明细</th><th>数量/中包数</th><th>合计</th><th></th></tr></thead>
               <tbody id="itemRows"><tr class="placeholder"><td colspan="3">搜索款色尺码，按回车选中</td></tr></tbody>
               <tfoot><tr><td>本大包合计</td><td id="boxTotal">0</td><td>件</td></tr></tfoot>
             </table>
@@ -102,6 +103,29 @@
     </form>
   </dialog>
 
+  <dialog id="ratioDialog" class="ratio-dialog">
+    <div class="dialog-title"><span>当前批次配比</span><button class="close" type="button" id="closeRatioDialog">×</button></div>
+    <div class="ratio-toolbar"><span class="muted">配比仅在当前批次使用；修改不影响已保存大包。</span><button id="newRatioBtn" class="primary" type="button">＋ 新建配比</button></div>
+    <div id="ratioList" class="ratio-list"></div>
+    <section id="ratioEditor" class="ratio-editor" hidden>
+      <div class="section-title"><span id="ratioEditorTitle">新建配比</span><button id="cancelRatioEdit" class="link" type="button">取消</button></div>
+      <div class="ratio-entry">
+        <div class="search-wrap">
+          <input id="ratioSkuSearch" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ratioSuggestions" placeholder="搜索本批次款色尺码">
+          <div id="ratioSuggestions" class="suggestions" role="listbox" hidden></div>
+        </div>
+        <input id="ratioSkuQty" type="number" min="1" placeholder="每中包数量">
+        <button id="addRatioSku" class="secondary" type="button">添加</button>
+      </div>
+      <div class="items-wrap"><table>
+        <thead><tr><th>款色尺码</th><th>每中包数量</th><th></th></tr></thead>
+        <tbody id="ratioItemRows"></tbody>
+        <tfoot><tr><td>每中包合计</td><td id="ratioTotal">0</td><td>件</td></tr></tfoot>
+      </table></div>
+      <button id="saveRatio" class="primary wide" type="button">保存配比</button>
+    </section>
+  </dialog>
+
   <dialog id="duplicateDialog">
     <div class="dialog-title">大包号已存在<button class="close" onclick="duplicateDialog.close()">×</button></div>
     <p id="duplicateText"></p>
@@ -122,6 +146,6 @@
   </dialog>
 
   <div id="toast" class="toast"></div>
-  <script src="{{ url_for('static', filename='app.js', v='20260722-3') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20260722-6') }}"></script>
 </body>
 </html>

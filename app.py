@@ -133,6 +133,52 @@ def init_db() -> None:
               UNIQUE(package_id, sku_id)
             )
             """,
+            f"""
+            CREATE TABLE IF NOT EXISTS packing_ratios (
+              id {id_type} PRIMARY KEY,
+              batch_id {fk_type} NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+              ratio_no INTEGER NOT NULL,
+              name TEXT NOT NULL,
+              is_active INTEGER NOT NULL DEFAULT 1,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(batch_id, ratio_no)
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS packing_ratio_items (
+              id {id_type} PRIMARY KEY,
+              ratio_id {fk_type} NOT NULL REFERENCES packing_ratios(id) ON DELETE CASCADE,
+              sku_id {fk_type} NOT NULL REFERENCES skus(id) ON DELETE RESTRICT,
+              quantity INTEGER NOT NULL,
+              sort_order INTEGER NOT NULL,
+              UNIQUE(ratio_id, sku_id)
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS package_entries (
+              id {id_type} PRIMARY KEY,
+              package_id {fk_type} NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+              entry_type TEXT NOT NULL,
+              sku_id {fk_type} REFERENCES skus(id) ON DELETE RESTRICT,
+              ratio_id {fk_type} REFERENCES packing_ratios(id) ON DELETE SET NULL,
+              label_snapshot TEXT NOT NULL,
+              units_per_pack INTEGER NOT NULL,
+              pack_count INTEGER NOT NULL,
+              sort_order INTEGER NOT NULL
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS package_entry_items (
+              id {id_type} PRIMARY KEY,
+              entry_id {fk_type} NOT NULL REFERENCES package_entries(id) ON DELETE CASCADE,
+              sku_id {fk_type} NOT NULL REFERENCES skus(id) ON DELETE RESTRICT,
+              label_snapshot TEXT NOT NULL,
+              quantity_per_pack INTEGER NOT NULL,
+              sort_order INTEGER NOT NULL,
+              UNIQUE(entry_id, sku_id)
+            )
+            """,
         ]
         for statement in statements:
             conn.execute(statement)
@@ -253,6 +299,76 @@ def as_optional_weight(value) -> float | None:
     return as_weight(value)
 
 
+def ratio_detail(name: str, items: list[dict]) -> str:
+    details = "；".join(f'{item["label"]}×{item["quantity"]}' for item in items)
+    return f"{name}：{details}"
+
+
+def ratio_record(conn: Connection, ratio_id: int, active_only: bool = True) -> dict | None:
+    active_sql = " AND r.is_active=1" if active_only else ""
+    ratio = conn.execute(
+        f"SELECT r.* FROM packing_ratios r WHERE r.id=?{active_sql}", (ratio_id,)
+    ).fetchone()
+    if not ratio:
+        return None
+    rows = conn.execute(
+        """SELECT pri.sku_id,pri.quantity,pri.sort_order,s.display_label
+           FROM packing_ratio_items pri JOIN skus s ON s.id=pri.sku_id
+           WHERE pri.ratio_id=? ORDER BY pri.sort_order""",
+        (ratio_id,),
+    ).fetchall()
+    items = [
+        {"sku_id": row["sku_id"], "quantity": row["quantity"], "label": row["display_label"]}
+        for row in rows
+    ]
+    result = dict(ratio)
+    result["items"] = items
+    result["units_per_pack"] = sum(item["quantity"] for item in items)
+    result["detail"] = ratio_detail(result["name"], items)
+    return result
+
+
+def batch_ratios(conn: Connection, batch_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id FROM packing_ratios WHERE batch_id=? AND is_active=1 ORDER BY ratio_no", (batch_id,)
+    ).fetchall()
+    return [ratio_record(conn, row["id"]) for row in rows]
+
+
+def validate_ratio_items(conn: Connection, batch_id: int, payload: dict) -> list[dict]:
+    if not isinstance(payload, dict):
+        raise ValueError("请求数据格式不正确")
+    raw_items = payload.get("items") or []
+    if not isinstance(raw_items, list):
+        raise ValueError("配比明细格式不正确")
+    merged: dict[int, int] = {}
+    order: list[int] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            raise ValueError("配比明细格式不正确")
+        try:
+            sku_id = int(item.get("sku_id", 0))
+        except (TypeError, ValueError):
+            sku_id = 0
+        quantity = as_positive_int(item.get("quantity"), "配比商品数量")
+        if sku_id not in merged:
+            order.append(sku_id)
+        merged[sku_id] = merged.get(sku_id, 0) + quantity
+    if not merged:
+        raise ValueError("配比至少需要一个款色尺码")
+    placeholders = ",".join("?" for _ in merged)
+    rows = conn.execute(
+        f"SELECT id,batch_id,display_label FROM skus WHERE id IN ({placeholders})", tuple(merged)
+    ).fetchall()
+    valid = {row["id"]: row for row in rows if row["batch_id"] == batch_id}
+    if len(valid) != len(merged):
+        raise ValueError("配比中存在不属于当前批次的款色尺码")
+    return [
+        {"sku_id": sku_id, "quantity": merged[sku_id], "label": valid[sku_id]["display_label"]}
+        for sku_id in order
+    ]
+
+
 def batch_payload(conn: sqlite3.Connection, batch_id: int) -> dict:
     batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
@@ -286,6 +402,7 @@ def batch_payload(conn: sqlite3.Connection, batch_id: int) -> dict:
             "packages": len(packages),
         },
         "skus": [dict(row) | {"remaining_qty": row["planned_qty"] - row["packed_qty"]} for row in skus],
+        "ratios": batch_ratios(conn, batch_id),
         "packages": [dict(row) | {"package_label": f'{row["package_no"]}#'} for row in packages],
     }
 
@@ -430,7 +547,249 @@ def get_batch(batch_id):
             return jsonify(error=str(exc)), 404
 
 
+@app.post("/api/batches/<int:batch_id>/ratios")
+def create_ratio(batch_id):
+    payload = request.get_json(force=True)
+    try:
+        with db() as conn:
+            if not conn.execute("SELECT id FROM batches WHERE id=?", (batch_id,)).fetchone():
+                raise LookupError("批次不存在")
+            items = validate_ratio_items(conn, batch_id, payload)
+            row = conn.execute(
+                "SELECT COALESCE(MAX(ratio_no),0) next_no FROM packing_ratios WHERE batch_id=?", (batch_id,)
+            ).fetchone()
+            ratio_no = int(row["next_no"]) + 1
+            stamp = now()
+            ratio_id = insert_id(
+                conn,
+                """INSERT INTO packing_ratios(batch_id,ratio_no,name,is_active,created_at,updated_at)
+                   VALUES(?,?,?,1,?,?)""",
+                (batch_id, ratio_no, f"配比{ratio_no}", stamp, stamp),
+            )
+            for order, item in enumerate(items):
+                conn.execute(
+                    "INSERT INTO packing_ratio_items(ratio_id,sku_id,quantity,sort_order) VALUES(?,?,?,?)",
+                    (ratio_id, item["sku_id"], item["quantity"], order),
+                )
+            conn.execute("UPDATE batches SET updated_at=? WHERE id=?", (stamp, batch_id))
+            result = ratio_record(conn, ratio_id)
+        daily_backup()
+        return jsonify(result), 201
+    except LookupError as exc:
+        return jsonify(error=str(exc)), 404
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@app.get("/api/ratios/<int:ratio_id>")
+def get_ratio(ratio_id):
+    with db() as conn:
+        result = ratio_record(conn, ratio_id)
+        if not result:
+            return jsonify(error="配比不存在"), 404
+        return jsonify(result)
+
+
+@app.put("/api/ratios/<int:ratio_id>")
+def update_ratio(ratio_id):
+    payload = request.get_json(force=True)
+    try:
+        with db() as conn:
+            ratio = ratio_record(conn, ratio_id)
+            if not ratio:
+                return jsonify(error="配比不存在"), 404
+            items = validate_ratio_items(conn, ratio["batch_id"], payload)
+            conn.execute("DELETE FROM packing_ratio_items WHERE ratio_id=?", (ratio_id,))
+            for order, item in enumerate(items):
+                conn.execute(
+                    "INSERT INTO packing_ratio_items(ratio_id,sku_id,quantity,sort_order) VALUES(?,?,?,?)",
+                    (ratio_id, item["sku_id"], item["quantity"], order),
+                )
+            stamp = now()
+            conn.execute("UPDATE packing_ratios SET updated_at=? WHERE id=?", (stamp, ratio_id))
+            conn.execute("UPDATE batches SET updated_at=? WHERE id=?", (stamp, ratio["batch_id"]))
+            result = ratio_record(conn, ratio_id)
+        daily_backup()
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@app.delete("/api/ratios/<int:ratio_id>")
+def delete_ratio(ratio_id):
+    with db() as conn:
+        ratio = ratio_record(conn, ratio_id)
+        if not ratio:
+            return jsonify(error="配比不存在"), 404
+        stamp = now()
+        conn.execute("UPDATE packing_ratios SET is_active=0,updated_at=? WHERE id=?", (stamp, ratio_id))
+        conn.execute("UPDATE batches SET updated_at=? WHERE id=?", (stamp, ratio["batch_id"]))
+    daily_backup()
+    return jsonify(ok=True)
+
+
+def fallback_package_entries(conn: Connection, package_id: int) -> list[dict]:
+    rows = conn.execute(
+        """SELECT pi.sku_id,pi.quantity,s.display_label FROM package_items pi
+           JOIN skus s ON s.id=pi.sku_id WHERE pi.package_id=? ORDER BY pi.sort_order""",
+        (package_id,),
+    ).fetchall()
+    return [
+        {
+            "entry_id": None, "entry_type": "sku", "sku_id": row["sku_id"], "ratio_id": None,
+            "label": row["display_label"], "units_per_pack": 1, "pack_count": row["quantity"],
+            "total_quantity": row["quantity"],
+            "items": [{"sku_id": row["sku_id"], "label": row["display_label"], "quantity_per_pack": 1}],
+        }
+        for row in rows
+    ]
+
+
+def package_entries_payload(conn: Connection, package_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM package_entries WHERE package_id=? ORDER BY sort_order", (package_id,)
+    ).fetchall()
+    if not rows:
+        return fallback_package_entries(conn, package_id)
+    entries = []
+    flattened: dict[int, int] = {}
+    for row in rows:
+        components = conn.execute(
+            """SELECT pei.sku_id,pei.label_snapshot,pei.quantity_per_pack FROM package_entry_items pei
+               WHERE pei.entry_id=? ORDER BY pei.sort_order""",
+            (row["id"],),
+        ).fetchall()
+        items = []
+        for item in components:
+            total = item["quantity_per_pack"] * row["pack_count"]
+            flattened[item["sku_id"]] = flattened.get(item["sku_id"], 0) + total
+            items.append({
+                "sku_id": item["sku_id"], "label": item["label_snapshot"],
+                "quantity_per_pack": item["quantity_per_pack"],
+            })
+        entries.append({
+            "entry_id": row["id"], "entry_type": row["entry_type"], "sku_id": row["sku_id"],
+            "ratio_id": row["ratio_id"], "label": row["label_snapshot"],
+            "units_per_pack": row["units_per_pack"], "pack_count": row["pack_count"],
+            "total_quantity": row["units_per_pack"] * row["pack_count"], "items": items,
+        })
+    authoritative = {
+        row["sku_id"]: row["quantity"] for row in conn.execute(
+            "SELECT sku_id,quantity FROM package_items WHERE package_id=?", (package_id,)
+        ).fetchall()
+    }
+    return entries if flattened == authoritative else fallback_package_entries(conn, package_id)
+
+
+def resolve_package_entries(
+    conn: Connection, batch_id: int, payload: dict, editing_id: int | None = None
+) -> tuple[list[dict], dict[int, int]]:
+    raw_entries = payload.get("entries")
+    if raw_entries is None:
+        legacy_items = payload.get("items") or []
+        if not isinstance(legacy_items, list) or any(not isinstance(item, dict) for item in legacy_items):
+            raise ValueError("大包商品明细格式不正确")
+        raw_entries = [
+            {"entry_type": "sku", "sku_id": item.get("sku_id"), "pack_count": item.get("quantity")}
+            for item in legacy_items
+        ]
+    if not isinstance(raw_entries, list) or any(not isinstance(entry, dict) for entry in raw_entries):
+        raise ValueError("大包商品明细格式不正确")
+    resolved: list[dict] = []
+    for raw_entry in raw_entries:
+        pack_count = as_positive_int(raw_entry.get("pack_count"), "数量")
+        entry_id = raw_entry.get("entry_id")
+        if entry_id and editing_id:
+            stored = conn.execute(
+                "SELECT * FROM package_entries WHERE id=? AND package_id=?", (entry_id, editing_id)
+            ).fetchone()
+            if not stored:
+                raise ValueError("大包内存在无效配比快照")
+            components = conn.execute(
+                "SELECT * FROM package_entry_items WHERE entry_id=? ORDER BY sort_order", (entry_id,)
+            ).fetchall()
+            resolved.append({
+                "entry_type": stored["entry_type"], "sku_id": stored["sku_id"],
+                "ratio_id": stored["ratio_id"], "label": stored["label_snapshot"],
+                "units_per_pack": stored["units_per_pack"], "pack_count": pack_count,
+                "items": [{
+                    "sku_id": item["sku_id"], "label": item["label_snapshot"],
+                    "quantity_per_pack": item["quantity_per_pack"],
+                } for item in components],
+            })
+            continue
+        entry_type = str(raw_entry.get("entry_type") or "sku")
+        if entry_type == "ratio":
+            try:
+                ratio_id = int(raw_entry.get("ratio_id", 0))
+            except (TypeError, ValueError):
+                ratio_id = 0
+            ratio = ratio_record(conn, ratio_id)
+            if not ratio or ratio["batch_id"] != batch_id:
+                raise ValueError("选择的配比不属于当前批次或已删除")
+            resolved.append({
+                "entry_type": "ratio", "sku_id": None, "ratio_id": ratio_id,
+                "label": ratio["detail"], "units_per_pack": ratio["units_per_pack"],
+                "pack_count": pack_count,
+                "items": [{
+                    "sku_id": item["sku_id"], "label": item["label"],
+                    "quantity_per_pack": item["quantity"],
+                } for item in ratio["items"]],
+            })
+        elif entry_type == "sku":
+            try:
+                sku_id = int(raw_entry.get("sku_id", 0))
+            except (TypeError, ValueError):
+                sku_id = 0
+            sku = conn.execute(
+                "SELECT id,batch_id,display_label FROM skus WHERE id=?", (sku_id,)
+            ).fetchone()
+            if not sku or sku["batch_id"] != batch_id:
+                raise ValueError("大包内存在不属于当前批次的商品")
+            resolved.append({
+                "entry_type": "sku", "sku_id": sku_id, "ratio_id": None,
+                "label": sku["display_label"], "units_per_pack": 1, "pack_count": pack_count,
+                "items": [{"sku_id": sku_id, "label": sku["display_label"], "quantity_per_pack": 1}],
+            })
+        else:
+            raise ValueError("大包内存在无效的商品类型")
+    if not resolved:
+        raise ValueError("当前大包还没有商品")
+    flattened: dict[int, int] = {}
+    for entry in resolved:
+        for item in entry["items"]:
+            quantity = item["quantity_per_pack"] * entry["pack_count"]
+            flattened[item["sku_id"]] = flattened.get(item["sku_id"], 0) + quantity
+    return resolved, flattened
+
+
+def write_package_contents(conn: Connection, package_id: int, entries: list[dict], flattened: dict[int, int]) -> None:
+    conn.execute("DELETE FROM package_entries WHERE package_id=?", (package_id,))
+    conn.execute("DELETE FROM package_items WHERE package_id=?", (package_id,))
+    for order, entry in enumerate(entries):
+        entry_id = insert_id(
+            conn,
+            """INSERT INTO package_entries(package_id,entry_type,sku_id,ratio_id,label_snapshot,
+               units_per_pack,pack_count,sort_order) VALUES(?,?,?,?,?,?,?,?)""",
+            (package_id, entry["entry_type"], entry["sku_id"], entry["ratio_id"], entry["label"],
+             entry["units_per_pack"], entry["pack_count"], order),
+        )
+        for item_order, item in enumerate(entry["items"]):
+            conn.execute(
+                """INSERT INTO package_entry_items(entry_id,sku_id,label_snapshot,quantity_per_pack,sort_order)
+                   VALUES(?,?,?,?,?)""",
+                (entry_id, item["sku_id"], item["label"], item["quantity_per_pack"], item_order),
+            )
+    for order, (sku_id, quantity) in enumerate(flattened.items()):
+        conn.execute(
+            "INSERT INTO package_items(package_id,sku_id,quantity,sort_order) VALUES(?,?,?,?)",
+            (package_id, sku_id, quantity, order),
+        )
+
+
 def validate_package(conn, batch_id: int, payload: dict, editing_id: int | None = None):
+    if not isinstance(payload, dict):
+        raise ValueError("请求数据格式不正确")
     start_no = parse_package_no(payload.get("package_no"))
     clone_count = as_positive_int(payload.get("clone_count", 1), "同款大包数")
     if clone_count > 500:
@@ -439,14 +798,7 @@ def validate_package(conn, batch_id: int, payload: dict, editing_id: int | None 
     width_cm = as_optional_positive_int(payload.get("width_cm"), "宽")
     height_cm = as_optional_positive_int(payload.get("height_cm"), "高")
     weight_kg = as_optional_weight(payload.get("weight_kg"))
-    items = payload.get("items") or []
-    merged = {}
-    for item in items:
-        sku_id = int(item.get("sku_id", 0))
-        qty = as_positive_int(item.get("quantity"), "商品数量")
-        merged[sku_id] = merged.get(sku_id, 0) + qty
-    if not merged:
-        raise ValueError("当前大包还没有商品")
+    entries, merged = resolve_package_entries(conn, batch_id, payload, editing_id)
     valid = conn.execute(
         f"SELECT id,display_label,planned_qty FROM skus WHERE batch_id=? AND id IN ({','.join('?' * len(merged))})",
         (batch_id, *merged.keys()),
@@ -483,7 +835,7 @@ def validate_package(conn, batch_id: int, payload: dict, editing_id: int | None 
     return {
         "start_no": start_no, "clone_count": clone_count, "target_nos": target_nos,
         "length_cm": length_cm, "width_cm": width_cm, "height_cm": height_cm,
-        "weight_kg": weight_kg, "items": merged, "overages": overages,
+        "weight_kg": weight_kg, "items": merged, "entries": entries, "overages": overages,
     }
 
 
@@ -503,8 +855,7 @@ def create_package(batch_id):
                        VALUES(?,?,?,?,?,?,?,?)""",
                     (batch_id, package_no, checked["length_cm"], checked["width_cm"], checked["height_cm"], checked["weight_kg"], stamp, stamp),
                 )
-                for order, (sku_id, qty) in enumerate(checked["items"].items()):
-                    conn.execute("INSERT INTO package_items(package_id,sku_id,quantity,sort_order) VALUES(?,?,?,?)", (package_id, sku_id, qty, order))
+                write_package_contents(conn, package_id, checked["entries"], checked["items"])
             conn.execute("UPDATE batches SET updated_at=? WHERE id=?", (stamp, batch_id))
             result = batch_payload(conn, batch_id)
         daily_backup()
@@ -520,7 +871,10 @@ def get_package(package_id):
         if not package:
             return jsonify(error="大包不存在"), 404
         items = conn.execute("SELECT sku_id,quantity FROM package_items WHERE package_id=? ORDER BY sort_order", (package_id,)).fetchall()
-        return jsonify(dict(package) | {"package_label": f'{package["package_no"]}#', "items": [dict(r) for r in items]})
+        return jsonify(dict(package) | {
+            "package_label": f'{package["package_no"]}#', "items": [dict(r) for r in items],
+            "entries": package_entries_payload(conn, package_id),
+        })
 
 
 @app.put("/api/packages/<int:package_id>")
@@ -540,9 +894,7 @@ def update_package(package_id):
                 "UPDATE packages SET package_no=?,length_cm=?,width_cm=?,height_cm=?,weight_kg=?,updated_at=? WHERE id=?",
                 (checked["start_no"], checked["length_cm"], checked["width_cm"], checked["height_cm"], checked["weight_kg"], stamp, package_id),
             )
-            conn.execute("DELETE FROM package_items WHERE package_id=?", (package_id,))
-            for order, (sku_id, qty) in enumerate(checked["items"].items()):
-                conn.execute("INSERT INTO package_items(package_id,sku_id,quantity,sort_order) VALUES(?,?,?,?)", (package_id, sku_id, qty, order))
+            write_package_contents(conn, package_id, checked["entries"], checked["items"])
             conn.execute("UPDATE batches SET updated_at=? WHERE id=?", (stamp, original["batch_id"]))
             result = batch_payload(conn, original["batch_id"])
         daily_backup()
@@ -578,26 +930,56 @@ def export_batch(batch_id):
         ws.append(["总大包数", data["summary"]["packages"], "总件数", data["summary"]["packed"], "已填总重量(kg)", round(total_weight, 2)])
         ws.append(["原文件", batch["source_filename"]])
         ws.append([])
-        headers = ["大包号", "款色尺码", "数量", "总数量", "长(cm)", "宽(cm)", "高(cm)", "重量(kg)"]
+        has_ratios = bool(conn.execute(
+            """SELECT pe.id FROM package_entries pe JOIN packages p ON p.id=pe.package_id
+               WHERE p.batch_id=? AND pe.entry_type='ratio' LIMIT 1""", (batch_id,)
+        ).fetchone())
+        headers = (
+            ["大包号", "款色尺码/配比明细", "数量", "中包件数", "中包数量", "总数量", "长(cm)", "宽(cm)", "高(cm)", "重量(kg)"]
+            if has_ratios else
+            ["大包号", "款色尺码", "数量", "总数量", "长(cm)", "宽(cm)", "高(cm)", "重量(kg)"]
+        )
         ws.append(headers)
         start = 6
         for package in packages:
-            items = conn.execute(
-                """SELECT s.display_label,pi.quantity FROM package_items pi JOIN skus s ON s.id=pi.sku_id
-                   WHERE pi.package_id=? ORDER BY pi.sort_order""", (package["id"],)
-            ).fetchall()
+            if has_ratios:
+                items = package_entries_payload(conn, package["id"])
+            else:
+                items = conn.execute(
+                    """SELECT s.display_label,pi.quantity FROM package_items pi JOIN skus s ON s.id=pi.sku_id
+                       WHERE pi.package_id=? ORDER BY pi.sort_order""", (package["id"],)
+                ).fetchall()
             block_start = start
-            total = sum(i["quantity"] for i in items)
+            total = sum(
+                i["total_quantity"] if has_ratios else i["quantity"] for i in items
+            )
             for i, item in enumerate(items):
-                ws.append([
-                    f'{package["package_no"]}#' if i == 0 else None, item["display_label"], item["quantity"],
-                    total if i == 0 else None, package["length_cm"] if i == 0 else None,
-                    package["width_cm"] if i == 0 else None, package["height_cm"] if i == 0 else None,
-                    package["weight_kg"] if i == 0 else None,
-                ])
+                if has_ratios:
+                    is_ratio = item["entry_type"] == "ratio"
+                    ws.append([
+                        f'{package["package_no"]}#' if i == 0 else None,
+                        item["label"],
+                        None if is_ratio else item["pack_count"],
+                        item["units_per_pack"] if is_ratio else None,
+                        item["pack_count"] if is_ratio else None,
+                        item["total_quantity"], package["length_cm"] if i == 0 else None,
+                        package["width_cm"] if i == 0 else None, package["height_cm"] if i == 0 else None,
+                        package["weight_kg"] if i == 0 else None,
+                    ])
+                    if is_ratio:
+                        visual_lines = max(2, (len(item["label"]) + 44) // 45)
+                        ws.row_dimensions[ws.max_row].height = 18 * visual_lines
+                else:
+                    ws.append([
+                        f'{package["package_no"]}#' if i == 0 else None, item["display_label"], item["quantity"],
+                        total if i == 0 else None, package["length_cm"] if i == 0 else None,
+                        package["width_cm"] if i == 0 else None, package["height_cm"] if i == 0 else None,
+                        package["weight_kg"] if i == 0 else None,
+                    ])
                 start += 1
             if len(items) > 1:
-                for col in (1, 4, 5, 6, 7, 8):
+                merged_columns = (1, 7, 8, 9, 10) if has_ratios else (1, 4, 5, 6, 7, 8)
+                for col in merged_columns:
                     ws.merge_cells(start_row=block_start, start_column=col, end_row=start - 1, end_column=col)
         diff = book.create_sheet("SKU库存汇总")
         diff.append(["商品编码", "商品名", "款式编码", "颜色规格", "仓位", "清单数量", "已装数量", "库存", "状态"])
@@ -619,7 +1001,7 @@ def export_batch(batch_id):
                     cell.alignment = Alignment(vertical="center", wrap_text=True)
             sheet.freeze_panes = f"A{header_row + 1}"
             sheet.auto_filter.ref = sheet.dimensions
-        widths = [12, 55, 10, 10, 10, 10, 10, 12]
+        widths = [12, 68, 10, 12, 12, 12, 10, 10, 10, 12] if has_ratios else [12, 55, 10, 10, 10, 10, 10, 12]
         for idx, width in enumerate(widths, 1): ws.column_dimensions[chr(64 + idx)].width = width
         for idx, width in enumerate([16, 22, 16, 18, 14, 12, 12, 10, 12], 1): diff.column_dimensions[chr(64 + idx)].width = width
         output = io.BytesIO()

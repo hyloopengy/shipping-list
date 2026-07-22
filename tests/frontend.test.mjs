@@ -123,3 +123,56 @@ test('批次只在点击查询后搜索历史，并显示大包缺失重量', as
   assert.match(window.document.getElementById('packageList').textContent, /体重未填/);
   assert.match(window.document.getElementById('packageList').textContent, /长未填/);
 });
+
+
+test('配比与款色尺码聚合搜索，悬停明细并按中包数量加入', async () => {
+  const ratioBatch = structuredClone(batch);
+  ratioBatch.ratios = [{
+    id: 51,
+    name: '配比1',
+    detail: '配比1：001 T恤 A001 黑色 XL×2；002 T恤 A002 白色 M×1',
+    units_per_pack: 3,
+    items: [
+      { sku_id: 11, label: '001 T恤 A001 黑色 XL', quantity: 2 },
+      { sku_id: 12, label: '002 T恤 A002 白色 M', quantity: 1 },
+    ],
+  }];
+  let savedPayload;
+  const window = await boot(async (url, options={}) => {
+    const path = String(url);
+    if (path === '/api/batches?q=') return { ok: true, status: 200, json: async () => [{ id: 1, batch_no: '20260722-001' }] };
+    if (path === '/api/batches/1') return { ok: true, status: 200, json: async () => structuredClone(ratioBatch) };
+    if (path === '/api/batches/1/packages') {
+      savedPayload = JSON.parse(options.body);
+      return { ok: true, status: 201, json: async () => ({ data: structuredClone(ratioBatch), created: ['1#'] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  });
+
+  const input = window.document.getElementById('skuSearch');
+  input.value = '配比1';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const option = window.document.querySelector('[data-option-index]');
+  assert.match(option.textContent, /配比1.*3件\/中包/);
+  assert.match(option.querySelector('.ratio-hover-detail').textContent, /黑色 XL×2.*白色 M×1/);
+  assert.equal(option.querySelectorAll('.ratio-hover-detail .ratio-detail-lines > span').length, 3);
+  option.dispatchEvent(new window.Event('pointerdown', { bubbles: true, cancelable: true }));
+  assert.equal(input.value, '配比1');
+  assert.match(window.document.getElementById('qtyReference').textContent, /最多 2 个中包/);
+
+  window.document.getElementById('skuQty').value = '2';
+  window.document.getElementById('addSku').click();
+  assert.match(window.document.getElementById('itemRows').textContent, /3件\/中包 × 2中包/);
+  assert.equal(window.document.querySelectorAll('#itemRows .ratio-detail-lines > span').length, 3);
+  assert.equal(window.document.getElementById('boxTotal').textContent, '6');
+
+  const quantityInput = window.document.querySelector('#itemRows [data-item-index="0"]');
+  quantityInput.value = '3';
+  quantityInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.equal(window.document.getElementById('boxTotal').textContent, '9');
+
+  window.document.getElementById('packageNo').value = '1#';
+  window.document.getElementById('savePackage').click();
+  await waitFor(() => savedPayload);
+  assert.deepEqual(savedPayload.entries, [{ entry_id: null, entry_type: 'ratio', sku_id: null, ratio_id: 51, pack_count: 3 }]);
+});
