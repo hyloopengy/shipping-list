@@ -1,3 +1,7 @@
+{
+	default_sni {$SERVER_ADDRESS}
+}
+
 {$SERVER_ADDRESS} {
 	tls {
 		issuer acme {
