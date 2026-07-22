@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>发货清单</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260722-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='tweaks.css', v='20260722-1') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div><strong>发货清单</strong></div>
+    <button class="ghost" id="newBatchBtn">＋ 导入新批次</button>
+  </header>
+
+  <main>
+    <section id="emptyState" class="empty card">
+      <h1>从一份聚水潭拣货单开始</h1>
+      <p>导入 Excel 后，系统自动生成批次并准备款色尺码搜索。</p>
+      <button class="primary" onclick="openImport()">导入拣货单</button>
+    </section>
+
+    <section id="workspace" hidden>
+      <div class="batchbar card">
+        <div class="batch-select">
+          <label>搜索批次号</label>
+          <div class="batch-search-group"><input id="batchSearch" placeholder="输入批次号，例如 20260721-003"><button id="batchSearchBtn" class="secondary" type="button">查询</button></div>
+          <label>当前批次</label>
+          <select id="batchSelect"></select>
+          <span id="batchMeta" class="muted"></span>
+        </div>
+        <div class="metrics">
+          <div><b id="mPackages">0</b><span>大包</span></div>
+          <div><b id="mPacked">0</b><span>已装</span></div>
+          <div><b id="mRemaining">0</b><span>未装</span></div>
+          <div class="danger"><b id="mOver">0</b><span>超装</span></div>
+        </div>
+        <a id="exportBtn" class="button ghost">导出 Excel</a>
+      </div>
+
+      <div class="workgrid">
+        <section class="card editor">
+          <div class="section-title"><span id="editorTitle">录入新大包</span><button id="cancelEdit" class="link" hidden>取消修改</button></div>
+          <div class="row package-row">
+            <label>大包号<input id="packageNo" inputmode="numeric" placeholder="输入 1，自动显示 1#"></label>
+            <label>同款大包数<input id="cloneCount" type="number" min="1" max="500" value="1"></label>
+          </div>
+          <div id="cloneHint" class="field-hint">填1只保存当前大包；填3会复制全部商品、数量和长宽高重，并生成连续3个大包。</div>
+
+          <div class="sku-entry">
+            <label>款色尺码</label>
+            <div class="search-wrap">
+              <input id="skuSearch" autocomplete="off" placeholder="例如：001 xl；空格分隔多个关键词">
+              <div id="suggestions" class="suggestions" hidden></div>
+            </div>
+            <label class="qty-label">数量 <span id="qtyReference" class="muted"></span><input id="skuQty" type="number" min="1" placeholder="先选择款色尺码"></label>
+            <button id="addSku" class="secondary">添加</button>
+          </div>
+
+          <div class="items-wrap">
+            <table>
+              <thead><tr><th>款色尺码</th><th>数量</th><th></th></tr></thead>
+              <tbody id="itemRows"><tr class="placeholder"><td colspan="3">搜索款色尺码，按回车选中</td></tr></tbody>
+              <tfoot><tr><td>本大包合计</td><td id="boxTotal">0</td><td>件</td></tr></tfoot>
+            </table>
+          </div>
+
+          <div class="dimensions">
+            <label>长 <span>cm</span><input id="lengthCm" type="number" min="1" step="1"></label>
+            <label>宽 <span>cm</span><input id="widthCm" type="number" min="1" step="1"></label>
+            <label>高 <span>cm</span><input id="heightCm" type="number" min="1" step="1"></label>
+            <label>重量 <span>kg</span><input id="weightKg" type="number" min="0.01" step="0.01"></label>
+          </div>
+          <div class="field-hint dimensions-hint">长、宽、高、重量均可暂不填写；已保存大包会明确提示缺少的信息。</div>
+          <button id="savePackage" class="primary wide">保存并继续下一个大包</button>
+        </section>
+
+        <aside class="card packages-panel">
+          <div class="section-title">已保存大包 <span id="packageHint" class="muted"></span></div>
+          <div id="packageList" class="package-list"></div>
+        </aside>
+      </div>
+
+      <section class="card diff-card">
+        <div class="section-title">SKU 库存核对</div>
+        <input id="diffSearch" class="compact-search" placeholder="搜索商品或款色尺码">
+        <div class="table-scroll"><table>
+          <thead><tr><th>款色尺码</th><th>仓位</th><th>清单</th><th>已装</th><th>库存</th><th>状态</th></tr></thead>
+          <tbody id="diffRows"></tbody>
+        </table></div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="importDialog">
+    <form id="importForm">
+      <div class="dialog-title">导入新批次<button type="button" class="close" onclick="importDialog.close()">×</button></div>
+      <label>聚水潭拣货单 Excel<input name="file" type="file" accept=".xlsx" required></label>
+      <label>内部单号<input name="internal_order" type="text" placeholder="本批次填写一次，将显示在导出表头" required></label>
+      <button class="primary wide" type="submit">导入并开始装箱</button>
+    </form>
+  </dialog>
+
+  <dialog id="duplicateDialog">
+    <div class="dialog-title">大包号已存在<button class="close" onclick="duplicateDialog.close()">×</button></div>
+    <p id="duplicateText"></p>
+    <div class="dialog-actions"><button class="ghost" onclick="duplicateDialog.close()">继续输入</button><button id="viewExisting" class="ghost">查看</button><button id="editExisting" class="primary">修改</button></div>
+  </dialog>
+
+  <dialog id="viewDialog">
+    <div class="dialog-title"><span id="viewTitle">查看大包</span><button class="close" onclick="viewDialog.close()">×</button></div>
+    <div id="viewContent" class="view-content"></div>
+    <div class="dialog-actions"><button class="primary" onclick="viewDialog.close()">关闭</button></div>
+  </dialog>
+
+  <dialog id="overDialog">
+    <div class="dialog-title">数量超过清单<button class="close" onclick="overDialog.close()">×</button></div>
+    <p>以下款色尺码保存后会超过本批次清单数量。真实业务无误时可以继续。</p>
+    <div id="overList"></div>
+    <div class="dialog-actions"><button class="ghost" onclick="overDialog.close()">返回修改</button><button id="forceSave" class="danger-btn">仍然保存</button></div>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+  <script src="{{ url_for('static', filename='app.js', v='20260722-1') }}"></script>
+</body>
+</html>

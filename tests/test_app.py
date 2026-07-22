@@ -1,0 +1,164 @@
+import io
+import os
+import sqlite3
+import tempfile
+import unittest
+from contextlib import closing
+from pathlib import Path
+
+TEST_DIR = tempfile.TemporaryDirectory()
+os.environ["PACKING_DATA_DIR"] = TEST_DIR.name
+os.environ["PACKING_DB_PATH"] = str(Path(TEST_DIR.name) / "test.db")
+
+from app import BACKUP_DIR, IS_POSTGRES, app  # noqa: E402
+from openpyxl import load_workbook  # noqa: E402
+
+
+SOURCE = Path(__file__).parents[2] / "拣货单_2026-07-20_17-07-35.xlsx"
+
+
+class PackingFlowTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        app.config.update(TESTING=True)
+        cls.client = app.test_client()
+        with cls.client.session_transaction() as current_session:
+            current_session["csrf_token"] = "test-csrf-token"
+        cls.csrf = {"X-CSRF-Token": "test-csrf-token"}
+
+    def import_source(self, internal_order="测试内部单号"):
+        with SOURCE.open("rb") as source:
+            response = self.client.post(
+                "/api/import",
+                data={"internal_order": internal_order, "file": (io.BytesIO(source.read()), SOURCE.name)},
+                content_type="multipart/form-data",
+                headers=self.csrf,
+            )
+        self.assertEqual(response.status_code, 201, response.get_json())
+        return response.get_json()
+
+    def test_complete_flow(self):
+        imported = self.import_source()
+        batch_id = imported["batch"]["id"]
+        self.assertEqual(len(imported["skus"]), 4)
+        self.assertEqual(imported["summary"]["planned"], 87)
+        self.assertEqual(imported["batch"]["internal_order"], "测试内部单号")
+
+        sku, second_sku = imported["skus"][:2]
+        payload = {
+            "package_no": "2#", "clone_count": 2,
+            "length_cm": 50, "width_cm": 40, "height_cm": 30, "weight_kg": 12.5,
+            "items": [{"sku_id": sku["id"], "quantity": 5}, {"sku_id": second_sku["id"], "quantity": 1}],
+        }
+        created = self.client.post(f"/api/batches/{batch_id}/packages", json=payload, headers=self.csrf)
+        self.assertEqual(created.status_code, 201, created.get_json())
+        self.assertEqual(created.get_json()["created"], ["2#", "3#"])
+
+        conflict = self.client.post(f"/api/batches/{batch_id}/packages", json=payload, headers=self.csrf)
+        self.assertEqual(conflict.status_code, 400)
+        self.assertIn("大包号已存在", conflict.get_json()["error"])
+
+        over = dict(payload, package_no=4, clone_count=1, items=[{"sku_id": sku["id"], "quantity": 3}])
+        warning = self.client.post(f"/api/batches/{batch_id}/packages", json=over, headers=self.csrf)
+        self.assertEqual(warning.status_code, 409, warning.get_json())
+        self.assertEqual(warning.get_json()["overages"][0]["after"], 13)
+        over["force"] = True
+        forced = self.client.post(f"/api/batches/{batch_id}/packages", json=over, headers=self.csrf)
+        self.assertEqual(forced.status_code, 201, forced.get_json())
+
+        export = self.client.get(f"/api/batches/{batch_id}/export")
+        self.assertEqual(export.status_code, 200)
+        book = load_workbook(io.BytesIO(export.data), data_only=True)
+        self.assertEqual(book.sheetnames, ["发货清单", "SKU库存汇总"])
+        self.assertEqual(book["发货清单"]["D1"].value, "测试内部单号")
+        self.assertEqual(book["发货清单"]["A6"].value, "2#")
+        self.assertIn("A6:A7", [str(r) for r in book["发货清单"].merged_cells.ranges])
+        self.assertEqual(book["发货清单"]["F2"].value, 37.5)
+
+        latest = forced.get_json()["data"]
+        package_two = next(p for p in latest["packages"] if p["package_no"] == 2)
+        changed = dict(payload, package_no=2, clone_count=99, items=[{"sku_id": sku["id"], "quantity": 2}])
+        updated = self.client.put(f'/api/packages/{package_two["id"]}', json=changed, headers=self.csrf)
+        self.assertEqual(updated.status_code, 200, updated.get_json())
+        self.assertEqual(updated.get_json()["data"]["summary"]["packed"], 11)
+
+        package_three = next(p for p in updated.get_json()["data"]["packages"] if p["package_no"] == 3)
+        deleted = self.client.delete(f'/api/packages/{package_three["id"]}', headers=self.csrf)
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(deleted.get_json()["data"]["summary"]["packages"], 2)
+        self.assertEqual(deleted.get_json()["data"]["summary"]["packed"], 5)
+
+        if not IS_POSTGRES:
+            backups = list(BACKUP_DIR.glob("packing-*.db"))
+            self.assertTrue(backups)
+            with closing(sqlite3.connect(backups[0])) as backup:
+                self.assertGreaterEqual(backup.execute("SELECT COUNT(*) FROM batches").fetchone()[0], 1)
+
+    def test_validation_and_atomic_clone_conflict(self):
+        imported = self.import_source()
+        batch_id = imported["batch"]["id"]
+        sku_id = imported["skus"][0]["id"]
+        base = {
+            "package_no": 1, "clone_count": 1,
+            "length_cm": 50, "width_cm": 40, "height_cm": 30, "weight_kg": 1.25,
+            "items": [{"sku_id": sku_id, "quantity": 1}],
+        }
+        for field, value, expected in [
+            ("package_no", "A1", "大包号"), ("length_cm", 1.5, "长"),
+            ("weight_kg", 1.234, "重量"), ("items", [], "没有商品"),
+            ("clone_count", 501, "最多生成500个大包"),
+        ]:
+            payload = dict(base)
+            payload[field] = value
+            response = self.client.post(f"/api/batches/{batch_id}/packages", json=payload, headers=self.csrf)
+            self.assertEqual(response.status_code, 400, response.get_json())
+            self.assertIn(expected, response.get_json()["error"])
+
+        created = self.client.post(f"/api/batches/{batch_id}/packages", json=base, headers=self.csrf)
+        self.assertEqual(created.status_code, 201)
+        clone = dict(base, package_no=1, clone_count=3)
+        conflict = self.client.post(f"/api/batches/{batch_id}/packages", json=clone, headers=self.csrf)
+        self.assertEqual(conflict.status_code, 400)
+        current = self.client.get(f"/api/batches/{batch_id}").get_json()
+        self.assertEqual(current["summary"]["packages"], 1)
+
+    def test_internal_order_is_required(self):
+        with SOURCE.open("rb") as source:
+            response = self.client.post(
+                "/api/import",
+                data={"file": (io.BytesIO(source.read()), SOURCE.name)},
+                content_type="multipart/form-data",
+                headers=self.csrf,
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("内部单号", response.get_json()["error"])
+
+        batches = self.client.get("/api/batches").get_json()
+        self.assertLessEqual(len(batches), 3)
+        found = self.client.get(f'/api/batches?q={batches[0]["batch_no"]}').get_json()
+        self.assertEqual(len(found), 1)
+
+    def test_optional_dimensions_and_csrf(self):
+        imported = self.import_source("可空尺寸测试")
+        batch_id = imported["batch"]["id"]
+        sku_id = imported["skus"][0]["id"]
+        payload = {
+            "package_no": 20,
+            "clone_count": 1,
+            "length_cm": "",
+            "width_cm": None,
+            "height_cm": "",
+            "weight_kg": "",
+            "items": [{"sku_id": sku_id, "quantity": 1}],
+        }
+        rejected = self.client.post(f"/api/batches/{batch_id}/packages", json=payload)
+        self.assertEqual(rejected.status_code, 403)
+        created = self.client.post(f"/api/batches/{batch_id}/packages", json=payload, headers=self.csrf)
+        self.assertEqual(created.status_code, 201, created.get_json())
+        package = created.get_json()["data"]["packages"][0]
+        self.assertIsNone(package["length_cm"])
+        self.assertIsNone(package["weight_kg"])
+
+
+if __name__ == "__main__":
+    unittest.main()
