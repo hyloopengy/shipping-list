@@ -940,70 +940,63 @@ def export_batch(batch_id):
             ["大包号", "款色尺码", "数量", "总数量", "长(cm)", "宽(cm)", "高(cm)", "重量(kg)"]
         )
         ws.append(headers)
-        start = 6
         for package in packages:
             if has_ratios:
                 items = package_entries_payload(conn, package["id"])
+                detail_lines: list[str] = []
+                quantity_lines: list[str] = []
+                middle_unit_lines: list[str] = []
+                middle_count_lines: list[str] = []
+                for item in items:
+                    if item["entry_type"] == "ratio":
+                        ratio_name = str(item["label"]).partition("：")[0]
+                        component_lines = [
+                            f'{component["label"]} ×{component["quantity_per_pack"]}'
+                            for component in item["items"]
+                        ]
+                        line_count = 1 + len(component_lines)
+                        detail_lines.extend([f"{ratio_name}：", *component_lines])
+                        quantity_lines.extend([""] * line_count)
+                        middle_unit_lines.extend([str(item["units_per_pack"]), *([""] * (line_count - 1))])
+                        middle_count_lines.extend([str(item["pack_count"]), *([""] * (line_count - 1))])
+                    else:
+                        detail_lines.append(item["label"])
+                        quantity_lines.append(str(item["pack_count"]))
+                        middle_unit_lines.append("")
+                        middle_count_lines.append("")
+                total = sum(item["total_quantity"] for item in items)
+                column_text = lambda lines: "\n".join(lines) if any(lines) else None
+                ws.append([
+                    f'{package["package_no"]}#', "\n".join(detail_lines), column_text(quantity_lines),
+                    column_text(middle_unit_lines), column_text(middle_count_lines), total,
+                    package["length_cm"], package["width_cm"], package["height_cm"], package["weight_kg"],
+                ])
+                ws.row_dimensions[ws.max_row].height = 18 * max(1, len(detail_lines))
             else:
                 items = conn.execute(
                     """SELECT s.display_label,pi.quantity FROM package_items pi JOIN skus s ON s.id=pi.sku_id
                        WHERE pi.package_id=? ORDER BY pi.sort_order""", (package["id"],)
                 ).fetchall()
-            block_start = start
-            total = sum(
-                i["total_quantity"] if has_ratios else i["quantity"] for i in items
-            )
-            for i, item in enumerate(items):
-                if has_ratios:
-                    is_ratio = item["entry_type"] == "ratio"
-                    ws.append([
-                        f'{package["package_no"]}#' if i == 0 else None,
-                        item["label"],
-                        None if is_ratio else item["pack_count"],
-                        item["units_per_pack"] if is_ratio else None,
-                        item["pack_count"] if is_ratio else None,
-                        total if i == 0 else None, package["length_cm"] if i == 0 else None,
-                        package["width_cm"] if i == 0 else None, package["height_cm"] if i == 0 else None,
-                        package["weight_kg"] if i == 0 else None,
-                    ])
-                    if is_ratio:
-                        visual_lines = max(2, (len(item["label"]) + 44) // 45)
-                        ws.row_dimensions[ws.max_row].height = 18 * visual_lines
-                else:
-                    ws.append([
-                        f'{package["package_no"]}#' if i == 0 else None, item["display_label"], item["quantity"],
-                        total if i == 0 else None, package["length_cm"] if i == 0 else None,
-                        package["width_cm"] if i == 0 else None, package["height_cm"] if i == 0 else None,
-                        package["weight_kg"] if i == 0 else None,
-                    ])
-                start += 1
-            if len(items) > 1:
-                merged_columns = (1, 6, 7, 8, 9, 10) if has_ratios else (1, 4, 5, 6, 7, 8)
-                for col in merged_columns:
-                    ws.merge_cells(start_row=block_start, start_column=col, end_row=start - 1, end_column=col)
-        diff = book.create_sheet("SKU库存汇总")
-        diff.append(["商品编码", "商品名", "款式编码", "颜色规格", "仓位", "清单数量", "已装数量", "库存", "状态"])
-        for sku in data["skus"]:
-            delta = sku["packed_qty"] - sku["planned_qty"]
-            status = "未开始" if sku["packed_qty"] == 0 else "未装完" if delta < 0 else "已匹配" if delta == 0 else "已超装"
-            inventory = sku["planned_qty"] - sku["packed_qty"]
-            diff.append([sku["sku_code"], sku["product_name"], sku["style_code"], sku["color_spec"], sku["warehouse"], sku["planned_qty"], sku["packed_qty"], inventory, status])
+                total = sum(item["quantity"] for item in items)
+                ws.append([
+                    f'{package["package_no"]}#', "\n".join(item["display_label"] for item in items),
+                    "\n".join(str(item["quantity"]) for item in items), total,
+                    package["length_cm"], package["width_cm"], package["height_cm"], package["weight_kg"],
+                ])
+                ws.row_dimensions[ws.max_row].height = 18 * max(1, len(items))
         navy, thin = "17324D", Side(style="thin", color="D6DEE6")
-        for sheet in (ws, diff):
-            header_row = 5 if sheet is ws else 1
-            for cell in sheet[header_row]:
-                cell.fill = PatternFill("solid", fgColor=navy)
-                cell.font = Font(color="FFFFFF", bold=True)
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            for row in sheet.iter_rows(min_row=header_row + 1):
-                for cell in row:
-                    cell.border = Border(bottom=thin)
-                    cell.alignment = Alignment(vertical="center", wrap_text=True)
-            sheet.freeze_panes = f"A{header_row + 1}"
-            sheet.auto_filter.ref = sheet.dimensions
+        for cell in ws[5]:
+            cell.fill = PatternFill("solid", fgColor=navy)
+            cell.font = Font(color="FFFFFF", bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for row in ws.iter_rows(min_row=6):
+            for cell in row:
+                cell.border = Border(bottom=thin)
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+        ws.freeze_panes = "A6"
+        ws.auto_filter.ref = ws.dimensions
         widths = [12, 68, 10, 12, 12, 12, 10, 10, 10, 12] if has_ratios else [12, 55, 10, 10, 10, 10, 10, 12]
         for idx, width in enumerate(widths, 1): ws.column_dimensions[chr(64 + idx)].width = width
-        for idx, width in enumerate([16, 22, 16, 18, 14, 12, 12, 10, 12], 1): diff.column_dimensions[chr(64 + idx)].width = width
         output = io.BytesIO()
         book.save(output)
         output.seek(0)
