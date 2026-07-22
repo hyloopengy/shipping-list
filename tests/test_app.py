@@ -223,11 +223,13 @@ class PackingFlowTest(unittest.TestCase):
         self.assertEqual(sheet["E5"].value, "中包数量")
         rows = list(sheet.iter_rows(min_row=6, values_only=True))
         ratio_rows = [row for row in rows if row[1] and str(row[1]).startswith("配比1：")]
-        self.assertEqual(ratio_rows[0][2:6], (None, 3, 2, 6))
+        self.assertEqual(ratio_rows[0][2:6], (None, 3, 2, None))
         self.assertNotIn("\n", str(ratio_rows[0][1]))
         self.assertIn("；", str(ratio_rows[0][1]))
         ratio_row_number = next(index for index in range(6, sheet.max_row + 1) if sheet.cell(index, 2).value == ratio_rows[0][1])
         self.assertGreaterEqual(sheet.row_dimensions[ratio_row_number].height, 36)
+        self.assertEqual(sheet["F6"].value, 7)
+        self.assertIn("F6:F7", [str(cell_range) for cell_range in sheet.merged_cells.ranges])
 
         deleted_ratio = self.client.delete(f'/api/ratios/{ratio["id"]}', headers=self.csrf)
         self.assertEqual(deleted_ratio.status_code, 200)

@@ -962,7 +962,7 @@ def export_batch(batch_id):
                         None if is_ratio else item["pack_count"],
                         item["units_per_pack"] if is_ratio else None,
                         item["pack_count"] if is_ratio else None,
-                        item["total_quantity"], package["length_cm"] if i == 0 else None,
+                        total if i == 0 else None, package["length_cm"] if i == 0 else None,
                         package["width_cm"] if i == 0 else None, package["height_cm"] if i == 0 else None,
                         package["weight_kg"] if i == 0 else None,
                     ])
@@ -978,7 +978,7 @@ def export_batch(batch_id):
                     ])
                 start += 1
             if len(items) > 1:
-                merged_columns = (1, 7, 8, 9, 10) if has_ratios else (1, 4, 5, 6, 7, 8)
+                merged_columns = (1, 6, 7, 8, 9, 10) if has_ratios else (1, 4, 5, 6, 7, 8)
                 for col in merged_columns:
                     ws.merge_cells(start_row=block_start, start_column=col, end_row=start - 1, end_column=col)
         diff = book.create_sheet("SKU库存汇总")
