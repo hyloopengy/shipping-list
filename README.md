@@ -2,6 +2,8 @@
 
 导入聚水潭拣货单后，按批次录入大包号、款色尺码、数量和可选的长宽高重，并按本批次库存进行软提醒。
 
+完整架构、安全、数据、测试与上线流程见 [技术方案.md](./技术方案.md)。
+
 ## 主要功能
 
 - 上传 `.xlsx` 自动生成日期流水批次号
@@ -80,5 +82,6 @@ docker compose down
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
+npm run test:frontend
 docker compose config
 ```
