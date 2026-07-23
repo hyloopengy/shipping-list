@@ -45,7 +45,8 @@ services:
       - "${HTTPS_PORT:-443}:443"
     environment:
       SERVER_ADDRESS: ${SERVER_ADDRESS:?请在.env中设置SERVER_ADDRESS}
-      ALLOWED_CIDRS: ${ALLOWED_CIDRS:?请在.env中设置ALLOWED_CIDRS}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-shipping}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:-请在.env中设置BASIC_AUTH_HASH}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

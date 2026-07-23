@@ -9,8 +9,9 @@
 		}
 	}
 
-	@notAllowed not remote_ip {$ALLOWED_CIDRS}
-	respond @notAllowed "当前网络不在允许访问范围内" 403
+	basic_auth {
+		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	}
 
 	reverse_proxy app:8080
 

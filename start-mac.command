@@ -32,7 +32,6 @@ if [ ! -f .env.local ]; then
     echo "POSTGRES_PASSWORD=$db_password"
     echo "SECRET_KEY=$secret_key"
     echo "SERVER_ADDRESS=localhost"
-    echo "ALLOWED_CIDRS=127.0.0.1/32 ::1/128"
     echo "APP_BIND=127.0.0.1"
     echo "APP_PORT=8080"
     echo "COOKIE_SECURE=0"

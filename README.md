@@ -37,7 +37,13 @@ cd shipping-list
 cp .env.example .env
 ```
 
-在 `.env` 中设置随机数据库密码、Flask 密钥、服务器公网 IP/域名和允许访问的公网 IP/CIDR。
+在 `.env` 中设置随机数据库密码、Flask 密钥、服务器公网 IP/域名、网页用户名和网页密码哈希。生成网页密码哈希：
+
+```bash
+docker run --rm caddy:2.10-alpine caddy hash-password --plaintext '你的网页密码'
+```
+
+将输出结果用单引号包住写入 `BASIC_AUTH_HASH`，服务器只保存哈希，不保存网页明文密码。用户名建议固定为 `shipping`，密码使用便于业务人员记忆但不属于常见口令的组合；浏览器选择“保存密码”后可长期记住。
 
 启动：
 
@@ -46,7 +52,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-架构：Caddy 对外开放 80/443；应用端口只绑定服务器回环地址；PostgreSQL 只在 Docker 内部网络通信。Caddy 为域名或支持的公网 IP 自动申请 HTTPS 证书，并只允许 `.env` 中配置的来源网段访问。
+架构：Caddy 对外开放 80/443；应用端口只绑定服务器回环地址；PostgreSQL 只在 Docker 内部网络通信。Caddy 为域名或支持的公网 IP 自动申请 HTTPS 证书，并在所有页面、静态文件和 API 进入应用前统一验证网页用户名和密码。
 
 ## 备份与更新
 
@@ -75,10 +81,11 @@ docker compose down
 
 - 所有 SQL 用户输入均使用参数绑定，不拼接用户值
 - PostgreSQL 不映射宿主机端口
-- 公网入口启用 HTTPS、来源 IP 白名单、CSRF 校验和安全响应头
+- 公网入口启用 HTTPS、全站密码验证、CSRF 校验和安全响应头
 - `.env`、数据库、上传文件、备份和 Excel 文件均不进入 Git
-- 公网服务器只开放 SSH、HTTP 和 HTTPS
-- 当前不设登录账号；变更办公网络后需同步更新 `ALLOWED_CIDRS`
+- 公网只开放 HTTP 80 和 HTTPS 443；PostgreSQL 5432、应用 8080 均不对公网开放
+- SSH 22 仅允许管理员固定来源访问，不向全网开放
+- 网页可从任意网络访问，但必须输入统一用户名和密码
 
 ## 测试
 
