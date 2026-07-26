@@ -176,6 +176,12 @@ function refreshQuantityReference() {
   }
 }
 function closeSuggestions() { $('suggestions').hidden = true; $('skuSearch').setAttribute('aria-expanded','false'); }
+function clearSelectedOption() {
+  state.selectedOption = null;
+  $('skuSearch').value = '';
+  refreshQuantityReference();
+  searchOptions('');
+}
 window.chooseOption = index => {
   if (!Number.isInteger(index) || index < 0 || index >= state.matches.length) return;
   state.selectedOption = state.matches[index]; $('skuSearch').value = state.selectedOption.entry_type === 'ratio' ? state.selectedOption.name : state.selectedOption.label;
@@ -405,8 +411,14 @@ $('batchSearchBtn').onclick = () => searchBatches().catch(error => toast(error.m
 $('batchSearch').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); searchBatches().catch(error => toast(error.message,true)); } };
 $('skuSearch').oninput = event => { state.selectedOption = null; refreshQuantityReference(); searchOptions(event.target.value); };
 $('skuSearch').onfocus = event => searchOptions(event.target.value); $('skuSearch').onclick = event => searchOptions(event.target.value);
+$('skuSearch').onbeforeinput = event => {
+  if (state.selectedOption && String(event.inputType).startsWith('deleteContent')) {
+    event.preventDefault(); clearSelectedOption();
+  }
+};
 $('skuSearch').onkeydown = event => {
-  if (event.key === 'ArrowDown') { event.preventDefault(); state.matchIndex = Math.min(state.matches.length - 1,state.matchIndex + 1); renderSuggestions(); }
+  if (state.selectedOption && (event.key === 'Backspace' || event.key === 'Delete')) { event.preventDefault(); clearSelectedOption(); }
+  else if (event.key === 'ArrowDown') { event.preventDefault(); state.matchIndex = Math.min(state.matches.length - 1,state.matchIndex + 1); renderSuggestions(); }
   else if (event.key === 'ArrowUp') { event.preventDefault(); state.matchIndex = Math.max(0,state.matchIndex - 1); renderSuggestions(); }
   else if (event.key === 'Enter' && state.matches.length) { event.preventDefault(); chooseOption(state.matchIndex); }
   else if (event.key === 'Escape') closeSuggestions();

@@ -109,6 +109,21 @@ test('手机端款色尺码独占整行并保留可滚动触摸下拉框', async
   option.dispatchEvent(new window.Event('pointerdown', { bubbles: true, cancelable: true }));
   assert.equal(input.getAttribute('aria-expanded'), 'false');
   assert.equal(window.document.activeElement.id, 'skuQty');
+
+  input.focus();
+  const mobileDelete = new window.InputEvent('beforeinput', {
+    bubbles: true, cancelable: true, inputType: 'deleteContentBackward', data: null,
+  });
+  input.dispatchEvent(mobileDelete);
+  assert.equal(mobileDelete.defaultPrevented, true);
+  assert.equal(input.value, '');
+  assert.equal(input.getAttribute('aria-expanded'), 'true');
+
+  window.document.querySelector('[data-option-index]').dispatchEvent(
+    new window.Event('pointerdown', { bubbles: true, cancelable: true }),
+  );
+  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+  assert.equal(input.value, '');
 });
 
 
