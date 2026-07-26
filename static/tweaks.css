@@ -220,3 +220,75 @@
   .ratio-card .actions { grid-column: 1 / -1; justify-content: flex-end; }
   .ratio-entry { grid-template-columns: 1fr 110px 68px; }
 }
+
+@media (max-width: 640px) {
+  body { font-size: 15px; }
+  .topbar { height: 56px; padding: 0 14px; }
+  .topbar strong { font-size: 18px; }
+  .topbar .ghost { padding: 8px 10px; }
+  main { margin: 10px auto; padding: 0 10px; }
+  .batchbar,.editor,.packages-panel,.diff-card { padding: 13px; }
+  .batchbar { display: block; }
+  .batch-select { min-width: 0; }
+  .batch-search-group { grid-template-columns: minmax(0, 1fr) auto; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 14px 0; }
+  .metrics b { font-size: 19px; }
+  .batch-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .batch-actions > * { width: 100%; }
+  .workgrid { display: block; margin-top: 10px; }
+  .packages-panel { margin-top: 10px; }
+  .row.package-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+
+  /* Keep iOS from zooming the page when a field receives focus. */
+  input,select,textarea { min-width: 0; font-size: 16px; }
+
+  .sku-entry {
+    grid-template-columns: minmax(0, 1fr) 88px;
+    gap: 9px;
+    margin-top: 18px;
+  }
+  .sku-entry > label:first-child,
+  .sku-entry > .search-wrap { grid-column: 1 / -1; }
+  .sku-entry > label:first-child { margin-bottom: -5px; }
+  .sku-entry .qty-label { grid-column: 1; }
+  .sku-entry #addSku { grid-column: 2; min-height: 44px; }
+  .sku-entry #ratioManagerBtn,.sku-entry #autoAllocationBtn {
+    grid-column: auto;
+    min-height: 44px;
+  }
+  .suggestions {
+    top: calc(100% + 4px);
+    z-index: 30;
+    max-height: min(46vh, 360px);
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .suggestions .suggestion { min-height: 50px; padding: 12px; touch-action: manipulation; }
+  .suggestion .ratio-hover-detail { display: block; }
+
+  .dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dimensions label:last-child { grid-column: 1 / -1; }
+  .items-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .items-wrap table { min-width: 560px; }
+  .compact-search { width: 100%; }
+  .package-card { align-items: flex-start; flex-wrap: wrap; }
+  .package-card .meta { flex-basis: calc(100% - 55px); }
+
+  dialog { width: calc(100vw - 16px); max-width: none; max-height: calc(100dvh - 16px); overflow: auto; }
+  dialog form { padding: 14px; }
+  .dialog-title { padding: 15px 14px 10px; }
+  dialog > p,#overList,.dialog-actions,.backup-list { margin-left: 14px; margin-right: 14px; }
+  .dialog-actions { flex-wrap: wrap; }
+  .dialog-actions button { min-height: 44px; }
+  .auto-allocation-body { padding: 0 14px 14px; }
+  .auto-select-actions,.auto-summary { align-items: flex-start; flex-wrap: wrap; }
+  .ratio-toolbar { align-items: stretch; flex-direction: column; margin: 0 14px 12px; }
+  .ratio-toolbar button { min-height: 44px; }
+  .ratio-list { margin: 0 14px 14px; }
+  .ratio-editor { margin: 0 14px 14px; padding: 12px; }
+  .ratio-entry { grid-template-columns: minmax(0, 1fr) 88px; }
+  .ratio-entry .search-wrap { grid-column: 1 / -1; }
+  .ratio-entry #ratioSkuQty { grid-column: 1; }
+  .ratio-entry #addRatioSku { grid-column: 2; min-height: 44px; }
+  .toast { left: 10px; right: 10px; bottom: 10px; text-align: center; }
+}

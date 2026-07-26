@@ -86,6 +86,32 @@ test('款色尺码支持点击展开、多关键词匹配、选择、扣减和�
 });
 
 
+test('手机端款色尺码独占整行并保留可滚动触摸下拉框', async () => {
+  const css = await readFile(new URL('../static/tweaks.css', import.meta.url), 'utf8');
+  assert.match(css, /@media \(max-width: 640px\)/);
+  assert.match(css, /\.sku-entry > \.search-wrap \{ grid-column: 1 \/ -1; \}/);
+  assert.match(css, /max-height: min\(46vh, 360px\)/);
+  assert.match(css, /-webkit-overflow-scrolling: touch/);
+  assert.match(css, /\.suggestions \.suggestion \{ min-height: 50px;/);
+  assert.match(css, /input,select,textarea \{ min-width: 0; font-size: 16px; \}/);
+
+  const window = await boot(async url => {
+    const body = String(url) === '/api/batches?q='
+      ? [{ id: 1, batch_no: '20260722-001' }]
+      : String(url) === '/api/batches/1' ? batch : [];
+    return { ok: true, status: 200, json: async () => structuredClone(body) };
+  });
+  Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+  const input = window.document.getElementById('skuSearch');
+  input.dispatchEvent(new window.Event('focus'));
+  assert.equal(input.getAttribute('aria-expanded'), 'true');
+  const option = window.document.querySelector('[data-option-index]');
+  option.dispatchEvent(new window.Event('pointerdown', { bubbles: true, cancelable: true }));
+  assert.equal(input.getAttribute('aria-expanded'), 'false');
+  assert.equal(window.document.activeElement.id, 'skuQty');
+});
+
+
 test('批次只在点击查询后搜索历史，并显示大包缺失重量', async () => {
   const calls = [];
   const oldBatch = structuredClone(batch);
