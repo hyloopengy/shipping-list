@@ -24,11 +24,15 @@ async function waitFor(check, timeoutMs = 2000) {
 }
 
 
-async function boot(fetchImpl) {
+async function boot(fetchImpl, { mobile = false } = {}) {
   const rawHtml = await readFile(new URL('../templates/index.html', import.meta.url), 'utf8');
   const html = rawHtml.replace(/<script src=.*?<\/script>/s, '');
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/' });
   const { window } = dom;
+  window.matchMedia = query => ({
+    matches: mobile && query === '(max-width: 640px)', media: query,
+    addEventListener() {}, removeEventListener() {},
+  });
   window.scrollTo = () => {};
   window.confirm = () => true;
   for (const dialog of window.document.querySelectorAll('dialog')) {
@@ -86,7 +90,7 @@ test('款色尺码支持点击展开、多关键词匹配、选择、扣减和�
 });
 
 
-test('手机端款色尺码独占整行并保留可滚动触摸下拉框', async () => {
+test('手机端用独立选择面板搜索、滚动和整行点选款色尺码', async () => {
   const css = await readFile(new URL('../static/tweaks.css', import.meta.url), 'utf8');
   assert.match(css, /@media \(max-width: 640px\)/);
   assert.match(css, /\.sku-entry > \.search-wrap \{ grid-column: 1 \/ -1; \}/);
@@ -94,36 +98,36 @@ test('手机端款色尺码独占整行并保留可滚动触摸下拉框', async
   assert.match(css, /-webkit-overflow-scrolling: touch/);
   assert.match(css, /\.suggestions \.suggestion \{ min-height: 50px;/);
   assert.match(css, /input,select,textarea \{ min-width: 0; font-size: 16px; \}/);
+  assert.match(css, /\.mobile-sku-dialog \{ height: min\(88dvh, 720px\)/);
+  assert.match(css, /\.mobile-sku-options \{ flex: 1 1 auto;/);
 
   const window = await boot(async url => {
     const body = String(url) === '/api/batches?q='
       ? [{ id: 1, batch_no: '20260722-001' }]
       : String(url) === '/api/batches/1' ? batch : [];
     return { ok: true, status: 200, json: async () => structuredClone(body) };
-  });
+  }, { mobile: true });
   Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
   const input = window.document.getElementById('skuSearch');
-  input.dispatchEvent(new window.Event('focus'));
-  assert.equal(input.getAttribute('aria-expanded'), 'true');
-  const option = window.document.querySelector('[data-option-index]');
+  assert.equal(input.readOnly, true);
+  input.click();
+  assert.equal(window.document.getElementById('mobileSkuDialog').open, true);
+  assert.match(window.document.getElementById('mobileSkuSummary').textContent, /找到 2 项/);
+  assert.equal(window.document.querySelectorAll('#mobileSuggestions [data-option-index]').length, 2);
+
+  const pickerSearch = window.document.getElementById('mobileSkuSearch');
+  pickerSearch.value = '001 xl';
+  pickerSearch.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.equal(window.document.querySelectorAll('#mobileSuggestions [data-option-index]').length, 1);
+  const option = window.document.querySelector('#mobileSuggestions [data-option-index]');
   option.dispatchEvent(new window.Event('pointerdown', { bubbles: true, cancelable: true }));
-  assert.equal(input.getAttribute('aria-expanded'), 'false');
+  assert.equal(window.document.getElementById('mobileSkuDialog').open, false);
+  assert.equal(input.value, '001 T恤 A001 黑色 XL');
   assert.equal(window.document.activeElement.id, 'skuQty');
-
-  input.focus();
-  const mobileDelete = new window.InputEvent('beforeinput', {
-    bubbles: true, cancelable: true, inputType: 'deleteContentBackward', data: null,
-  });
-  input.dispatchEvent(mobileDelete);
-  assert.equal(mobileDelete.defaultPrevented, true);
+  assert.equal(window.document.getElementById('clearSkuSelection').hidden, false);
+  window.document.getElementById('clearSkuSelection').click();
   assert.equal(input.value, '');
-  assert.equal(input.getAttribute('aria-expanded'), 'true');
-
-  window.document.querySelector('[data-option-index]').dispatchEvent(
-    new window.Event('pointerdown', { bubbles: true, cancelable: true }),
-  );
-  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
-  assert.equal(input.value, '');
+  assert.equal(window.document.getElementById('clearSkuSelection').hidden, true);
 });
 
 

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>发货清单</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260726-4') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='tweaks.css', v='20260726-4') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260726-5') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='tweaks.css', v='20260726-5') }}">
 </head>
 <body>
   <header class="topbar">
@@ -52,6 +52,7 @@
             <label>款色尺码</label>
             <div class="search-wrap">
               <input id="skuSearch" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="suggestions" placeholder="点击展开；可输入 001 xl 等多个关键词">
+              <button id="clearSkuSelection" class="clear-selection" type="button" aria-label="清空已选款色尺码" hidden>×</button>
               <div id="suggestions" class="suggestions" role="listbox" hidden></div>
             </div>
             <label class="qty-label">数量 <span id="qtyReference" class="muted"></span><input id="skuQty" type="number" min="1" placeholder="先选择款色尺码"></label>
@@ -151,6 +152,15 @@
     </section>
   </dialog>
 
+  <dialog id="mobileSkuDialog" class="mobile-sku-dialog">
+    <div class="dialog-title"><span>选择款色尺码或配比</span><button class="close" type="button" id="closeMobileSkuDialog">×</button></div>
+    <div class="mobile-picker-body">
+      <input id="mobileSkuSearch" type="search" autocomplete="off" enterkeyhint="search" placeholder="输入 001、xl 等关键词">
+      <div id="mobileSkuSummary" class="mobile-picker-summary"></div>
+      <div id="mobileSuggestions" class="mobile-sku-options" role="listbox"></div>
+    </div>
+  </dialog>
+
   <dialog id="duplicateDialog">
     <div class="dialog-title">大包号已存在<button class="close" onclick="duplicateDialog.close()">×</button></div>
     <p id="duplicateText"></p>
@@ -171,6 +181,6 @@
   </dialog>
 
   <div id="toast" class="toast"></div>
-  <script src="{{ url_for('static', filename='app.js', v='20260726-4') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20260726-5') }}"></script>
 </body>
 </html>

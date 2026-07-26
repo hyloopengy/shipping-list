@@ -151,23 +151,33 @@ function ratioMaxPacks(option) {
     return Math.floor(referenceRemaining(sku) / item.quantity_per_pack);
   }));
 }
-function renderSuggestions() {
-  const box = $('suggestions'); const input = $('skuSearch');
-  if (!state.matches.length) { box.innerHTML = '<div class="suggestion empty-option">当前批次没有匹配结果</div>'; box.hidden = false; input.setAttribute('aria-expanded','true'); return; }
-  box.hidden = false; input.setAttribute('aria-expanded','true');
-  box.innerHTML = state.matches.map((option,index) => {
+function suggestionRowsHtml(mobile=false) {
+  if (!state.matches.length) return '<div class="suggestion empty-option">当前批次没有匹配结果</div>';
+  return state.matches.map((option,index) => {
     if (option.entry_type === 'ratio') {
       const available = ratioMaxPacks(option);
       return `<button type="button" class="suggestion ${index === state.matchIndex ? 'active' : ''}" data-option-index="${index}" data-sku-index="${index}" role="option">` +
         `<span class="entry-kind">配比</span><b>${escapeHtml(option.name)}</b> · ${option.units_per_pack}件/中包` +
-        `<small>参考最多 ${available} 个中包 · 悬停查看明细</small><span class="ratio-hover-detail">${ratioDetailHtml(option.detail)}</span></button>`;
+        `<small>参考最多 ${available} 个中包 · ${mobile ? '点击整行选择' : '悬停查看明细'}</small><span class="ratio-hover-detail">${ratioDetailHtml(option.detail)}</span></button>`;
     }
     const remaining = referenceRemaining(option.sku);
     return `<button type="button" class="suggestion ${index === state.matchIndex ? 'active' : ''}" data-option-index="${index}" data-sku-index="${index}" role="option">` +
       `${escapeHtml(option.label)}<small>仓位 ${escapeHtml(option.sku.warehouse || '-')} · 清单 ${option.sku.planned_qty} · 已保存 ${option.sku.packed_qty} · 当前参考库存 ${remaining}</small></button>`;
   }).join('');
 }
+function renderSuggestions() {
+  const box = $('suggestions'); const input = $('skuSearch');
+  if ($('mobileSkuDialog').open) {
+    box.hidden = true; input.setAttribute('aria-expanded','false');
+    $('mobileSuggestions').innerHTML = suggestionRowsHtml(true);
+    $('mobileSkuSummary').textContent = state.matches.length ? `找到 ${state.matches.length} 项，可上下滑动，点击整行选择` : '请换一个关键词';
+    return;
+  }
+  box.hidden = false; input.setAttribute('aria-expanded','true');
+  box.innerHTML = suggestionRowsHtml();
+}
 function refreshQuantityReference() {
+  $('clearSkuSelection').hidden = !state.selectedOption;
   if (!state.selectedOption) { $('qtyReference').textContent = ''; $('skuQty').placeholder = '先选择款色尺码或配比'; return; }
   if (state.selectedOption.entry_type === 'ratio') {
     const available = ratioMaxPacks(state.selectedOption); $('qtyReference').textContent = `参考最多 ${available} 个中包`; $('skuQty').placeholder = `中包数量：${available}`;
@@ -176,16 +186,27 @@ function refreshQuantityReference() {
   }
 }
 function closeSuggestions() { $('suggestions').hidden = true; $('skuSearch').setAttribute('aria-expanded','false'); }
+function usesMobileSkuPicker() { return Boolean(window.matchMedia?.('(max-width: 640px)').matches); }
+function syncSkuPickerMode() {
+  $('skuSearch').readOnly = usesMobileSkuPicker();
+  $('skuSearch').setAttribute('aria-haspopup', usesMobileSkuPicker() ? 'dialog' : 'listbox');
+}
+function openMobileSkuPicker() {
+  if (!state.data || $('mobileSkuDialog').open) return;
+  closeSuggestions(); $('mobileSkuDialog').showModal(); $('mobileSkuSearch').value = '';
+  searchOptions('');
+}
 function clearSelectedOption() {
   state.selectedOption = null;
   $('skuSearch').value = '';
   refreshQuantityReference();
-  searchOptions('');
+  if (usesMobileSkuPicker()) closeSuggestions(); else searchOptions('');
 }
 window.chooseOption = index => {
   if (!Number.isInteger(index) || index < 0 || index >= state.matches.length) return;
   state.selectedOption = state.matches[index]; $('skuSearch').value = state.selectedOption.entry_type === 'ratio' ? state.selectedOption.name : state.selectedOption.label;
-  closeSuggestions(); refreshQuantityReference(); $('skuQty').focus(); $('skuQty').select();
+  closeSuggestions(); if ($('mobileSkuDialog').open) $('mobileSkuDialog').close();
+  refreshQuantityReference(); $('skuQty').focus(); $('skuQty').select();
 };
 function addSelected() {
   if (!state.selectedOption) { toast('请先选择款色尺码或配比', true); $('skuSearch').focus(); return; }
@@ -410,7 +431,8 @@ async function searchBatches() {
 $('batchSearchBtn').onclick = () => searchBatches().catch(error => toast(error.message,true));
 $('batchSearch').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); searchBatches().catch(error => toast(error.message,true)); } };
 $('skuSearch').oninput = event => { state.selectedOption = null; refreshQuantityReference(); searchOptions(event.target.value); };
-$('skuSearch').onfocus = event => searchOptions(event.target.value); $('skuSearch').onclick = event => searchOptions(event.target.value);
+$('skuSearch').onfocus = event => usesMobileSkuPicker() ? openMobileSkuPicker() : searchOptions(event.target.value);
+$('skuSearch').onclick = event => usesMobileSkuPicker() ? openMobileSkuPicker() : searchOptions(event.target.value);
 $('skuSearch').onbeforeinput = event => {
   if (state.selectedOption && String(event.inputType).startsWith('deleteContent')) {
     event.preventDefault(); clearSelectedOption();
@@ -424,6 +446,10 @@ $('skuSearch').onkeydown = event => {
   else if (event.key === 'Escape') closeSuggestions();
 };
 $('suggestions').addEventListener('pointerdown',event => { const option = event.target.closest('[data-option-index]'); if (!option) return; event.preventDefault(); chooseOption(Number(option.dataset.optionIndex)); });
+$('mobileSkuSearch').oninput = event => searchOptions(event.target.value);
+$('mobileSuggestions').addEventListener('pointerdown',event => { const option = event.target.closest('[data-option-index]'); if (!option) return; event.preventDefault(); chooseOption(Number(option.dataset.optionIndex)); });
+$('closeMobileSkuDialog').onclick = () => $('mobileSkuDialog').close();
+$('clearSkuSelection').onclick = event => { event.preventDefault(); event.stopPropagation(); clearSelectedOption(); };
 $('itemRows').addEventListener('input',event => { if (!event.target.matches('[data-item-index]')) return; if (syncItemQuantities()) { updateCloneHint(); } });
 document.addEventListener('pointerdown',event => { if (!event.target.closest('.search-wrap')) { closeSuggestions(); $('ratioSuggestions').hidden = true; } });
 $('skuQty').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); addSelected(); } };
@@ -449,4 +475,6 @@ $('importForm').onsubmit = async event => {
   catch (error) { toast(error.message,true); } finally { button.disabled = false; button.textContent = '导入并开始装箱'; }
 };
 
+syncSkuPickerMode();
+window.addEventListener('resize', syncSkuPickerMode);
 loadBatches().catch(error => toast(error.message,true));

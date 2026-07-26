@@ -67,6 +67,25 @@
   color: var(--muted);
 }
 
+.search-wrap > input { padding-right: 38px; }
+.clear-selection {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  z-index: 6;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 50%;
+  background: #e8eef5;
+  color: #526579;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
 @media (max-width: 640px) {
   .batch-select {
     min-width: 100%;
@@ -212,6 +231,17 @@
 
 .ratio-editor .wide { margin-top: 14px; }
 
+.mobile-sku-dialog { width: min(620px, calc(100vw - 16px)); }
+.mobile-picker-body { display: flex; flex-direction: column; min-height: 0; padding: 0 14px 14px; }
+.mobile-picker-body > input { flex: 0 0 auto; width: 100%; }
+.mobile-picker-summary { flex: 0 0 auto; padding: 8px 2px; color: var(--muted); font-size: 12px; }
+.mobile-sku-options { flex: 1 1 auto; min-height: 0; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.mobile-sku-options .suggestion { display: block; width: 100%; min-height: 54px; padding: 12px; border: 0; border-bottom: 1px solid #edf1f4; background: #fff; color: inherit; text-align: left; touch-action: manipulation; }
+.mobile-sku-options .suggestion:last-child { border-bottom: 0; }
+.mobile-sku-options .suggestion:active { background: #eaf1ff; }
+.mobile-sku-options .suggestion small { display: block; color: var(--muted); }
+.mobile-sku-options .empty-option { color: var(--muted); }
+
 @media (max-width: 760px) {
   .sku-entry { grid-template-columns: minmax(0, 1fr) 110px 68px; }
   .sku-entry #ratioManagerBtn,.sku-entry #autoAllocationBtn { grid-column: auto; }
@@ -264,7 +294,12 @@
     -webkit-overflow-scrolling: touch;
   }
   .suggestions .suggestion { min-height: 50px; padding: 12px; touch-action: manipulation; }
-  .suggestion .ratio-hover-detail { display: block; }
+  .mobile-sku-options .ratio-hover-detail { display: block; }
+
+  .mobile-sku-dialog { height: min(88dvh, 720px); padding: 0; }
+  .mobile-sku-dialog[open] { display: flex; flex-direction: column; }
+  .mobile-sku-dialog .dialog-title { flex: 0 0 auto; }
+  .mobile-sku-dialog .mobile-picker-body { flex: 1 1 auto; }
 
   .dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dimensions label:last-child { grid-column: 1 / -1; }
