@@ -167,7 +167,7 @@ function suggestionRowsHtml(mobile=false) {
 }
 function renderSuggestions() {
   const box = $('suggestions'); const input = $('skuSearch');
-  if ($('mobileSkuDialog').open) {
+  if (mobileSkuPickerOpen()) {
     box.hidden = true; input.setAttribute('aria-expanded','false');
     $('mobileSuggestions').innerHTML = suggestionRowsHtml(true);
     $('mobileSkuSummary').textContent = state.matches.length ? `找到 ${state.matches.length} 项，可上下滑动，点击整行选择` : '请换一个关键词';
@@ -187,14 +187,24 @@ function refreshQuantityReference() {
 }
 function closeSuggestions() { $('suggestions').hidden = true; $('skuSearch').setAttribute('aria-expanded','false'); }
 function usesMobileSkuPicker() { return Boolean(window.matchMedia?.('(max-width: 640px)').matches); }
+function mobileSkuPickerOpen() { return !$('mobileSkuOverlay').hidden; }
 function syncSkuPickerMode() {
-  $('skuSearch').readOnly = usesMobileSkuPicker();
-  $('skuSearch').setAttribute('aria-haspopup', usesMobileSkuPicker() ? 'dialog' : 'listbox');
+  const mobile = usesMobileSkuPicker();
+  $('skuSearch').readOnly = mobile;
+  $('skuSearch').setAttribute('aria-haspopup', mobile ? 'dialog' : 'listbox');
+  if (!mobile && mobileSkuPickerOpen()) closeMobileSkuPicker();
 }
 function openMobileSkuPicker() {
-  if (!state.data || $('mobileSkuDialog').open) return;
-  closeSuggestions(); $('mobileSkuDialog').showModal(); $('mobileSkuSearch').value = '';
+  if (!state.data || mobileSkuPickerOpen()) return;
+  closeSuggestions(); $('mobileSkuOverlay').hidden = false; document.body.classList.add('mobile-picker-open');
+  $('skuSearch').setAttribute('aria-expanded','true');
+  $('mobileSkuSearch').value = '';
   searchOptions('');
+}
+function closeMobileSkuPicker() {
+  $('mobileSkuOverlay').hidden = true;
+  document.body.classList.remove('mobile-picker-open');
+  $('skuSearch').setAttribute('aria-expanded','false');
 }
 function clearSelectedOption() {
   state.selectedOption = null;
@@ -205,7 +215,7 @@ function clearSelectedOption() {
 window.chooseOption = index => {
   if (!Number.isInteger(index) || index < 0 || index >= state.matches.length) return;
   state.selectedOption = state.matches[index]; $('skuSearch').value = state.selectedOption.entry_type === 'ratio' ? state.selectedOption.name : state.selectedOption.label;
-  closeSuggestions(); if ($('mobileSkuDialog').open) $('mobileSkuDialog').close();
+  closeSuggestions(); if (mobileSkuPickerOpen()) closeMobileSkuPicker();
   refreshQuantityReference(); $('skuQty').focus(); $('skuQty').select();
 };
 function addSelected() {
@@ -431,7 +441,7 @@ async function searchBatches() {
 $('batchSearchBtn').onclick = () => searchBatches().catch(error => toast(error.message,true));
 $('batchSearch').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); searchBatches().catch(error => toast(error.message,true)); } };
 $('skuSearch').oninput = event => { state.selectedOption = null; refreshQuantityReference(); searchOptions(event.target.value); };
-$('skuSearch').onfocus = event => usesMobileSkuPicker() ? openMobileSkuPicker() : searchOptions(event.target.value);
+$('skuSearch').onfocus = event => { if (!usesMobileSkuPicker()) searchOptions(event.target.value); };
 $('skuSearch').onclick = event => usesMobileSkuPicker() ? openMobileSkuPicker() : searchOptions(event.target.value);
 $('skuSearch').onbeforeinput = event => {
   if (state.selectedOption && String(event.inputType).startsWith('deleteContent')) {
@@ -447,8 +457,10 @@ $('skuSearch').onkeydown = event => {
 };
 $('suggestions').addEventListener('pointerdown',event => { const option = event.target.closest('[data-option-index]'); if (!option) return; event.preventDefault(); chooseOption(Number(option.dataset.optionIndex)); });
 $('mobileSkuSearch').oninput = event => searchOptions(event.target.value);
-$('mobileSuggestions').addEventListener('pointerdown',event => { const option = event.target.closest('[data-option-index]'); if (!option) return; event.preventDefault(); chooseOption(Number(option.dataset.optionIndex)); });
-$('closeMobileSkuDialog').onclick = () => $('mobileSkuDialog').close();
+$('mobileSuggestions').addEventListener('click',event => { const option = event.target.closest('[data-option-index]'); if (!option) return; chooseOption(Number(option.dataset.optionIndex)); });
+$('closeMobileSkuDialog').onclick = closeMobileSkuPicker;
+$('mobileSkuOverlay').onclick = event => { if (event.target === $('mobileSkuOverlay')) closeMobileSkuPicker(); };
+$('mobileSkuOverlay').onkeydown = event => { if (event.key === 'Escape') { event.preventDefault(); closeMobileSkuPicker(); } };
 $('clearSkuSelection').onclick = event => { event.preventDefault(); event.stopPropagation(); clearSelectedOption(); };
 $('itemRows').addEventListener('input',event => { if (!event.target.matches('[data-item-index]')) return; if (syncItemQuantities()) { updateCloneHint(); } });
 document.addEventListener('pointerdown',event => { if (!event.target.closest('.search-wrap')) { closeSuggestions(); $('ratioSuggestions').hidden = true; } });

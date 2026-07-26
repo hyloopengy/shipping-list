@@ -98,7 +98,8 @@ test('手机端用独立选择面板搜索、滚动和整行点选款色尺码',
   assert.match(css, /-webkit-overflow-scrolling: touch/);
   assert.match(css, /\.suggestions \.suggestion \{ min-height: 50px;/);
   assert.match(css, /input,select,textarea \{ min-width: 0; font-size: 16px; \}/);
-  assert.match(css, /\.mobile-sku-dialog \{ height: min\(88dvh, 720px\)/);
+  assert.match(css, /\.mobile-sku-overlay\[hidden\] \{ display: none; \}/);
+  assert.match(css, /\.mobile-sku-panel \{ height: min\(88vh, 720px\); height: min\(88dvh, 720px\); \}/);
   assert.match(css, /\.mobile-sku-options \{ flex: 1 1 auto;/);
 
   const window = await boot(async url => {
@@ -110,10 +111,19 @@ test('手机端用独立选择面板搜索、滚动和整行点选款色尺码',
   Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
   const input = window.document.getElementById('skuSearch');
   assert.equal(input.readOnly, true);
+  input.focus();
+  assert.equal(window.document.getElementById('mobileSkuOverlay').hidden, true, '手指尚未抬起时不应提前弹出');
   input.click();
-  assert.equal(window.document.getElementById('mobileSkuDialog').open, true);
+  const overlay = window.document.getElementById('mobileSkuOverlay');
+  assert.equal(overlay.hidden, false);
+  assert.equal(window.document.body.classList.contains('mobile-picker-open'), true);
   assert.match(window.document.getElementById('mobileSkuSummary').textContent, /找到 2 项/);
   assert.equal(window.document.querySelectorAll('#mobileSuggestions [data-option-index]').length, 2);
+
+  window.document.getElementById('closeMobileSkuDialog').click();
+  assert.equal(overlay.hidden, true);
+  input.click();
+  assert.equal(overlay.hidden, false);
 
   const pickerSearch = window.document.getElementById('mobileSkuSearch');
   pickerSearch.value = '001 xl';
@@ -121,13 +131,19 @@ test('手机端用独立选择面板搜索、滚动和整行点选款色尺码',
   assert.equal(window.document.querySelectorAll('#mobileSuggestions [data-option-index]').length, 1);
   const option = window.document.querySelector('#mobileSuggestions [data-option-index]');
   option.dispatchEvent(new window.Event('pointerdown', { bubbles: true, cancelable: true }));
-  assert.equal(window.document.getElementById('mobileSkuDialog').open, false);
+  assert.equal(overlay.hidden, false, '滑动开始不应误选');
+  option.querySelector('small').click();
+  assert.equal(overlay.hidden, true);
   assert.equal(input.value, '001 T恤 A001 黑色 XL');
   assert.equal(window.document.activeElement.id, 'skuQty');
   assert.equal(window.document.getElementById('clearSkuSelection').hidden, false);
   window.document.getElementById('clearSkuSelection').click();
   assert.equal(input.value, '');
   assert.equal(window.document.getElementById('clearSkuSelection').hidden, true);
+
+  input.click();
+  overlay.click();
+  assert.equal(overlay.hidden, true, '点击遮罩应关闭面板');
 });
 
 

@@ -231,7 +231,33 @@
 
 .ratio-editor .wide { margin-top: 14px; }
 
-.mobile-sku-dialog { width: min(620px, calc(100vw - 16px)); }
+.mobile-sku-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: #10263b80;
+}
+.mobile-sku-overlay[hidden] { display: none; }
+.mobile-sku-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 100%);
+  max-height: min(88vh, 720px);
+  max-height: min(88dvh, 720px);
+  overflow: hidden;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 24px 80px #172b3f55;
+}
+body.mobile-picker-open { overflow: hidden; }
 .mobile-picker-body { display: flex; flex-direction: column; min-height: 0; padding: 0 14px 14px; }
 .mobile-picker-body > input { flex: 0 0 auto; width: 100%; }
 .mobile-picker-summary { flex: 0 0 auto; padding: 8px 2px; color: var(--muted); font-size: 12px; }
@@ -241,6 +267,7 @@
 .mobile-sku-options .suggestion:active { background: #eaf1ff; }
 .mobile-sku-options .suggestion small { display: block; color: var(--muted); }
 .mobile-sku-options .empty-option { color: var(--muted); }
+.mobile-sku-panel .close { flex: 0 0 44px; width: 44px; height: 44px; padding: 0; touch-action: manipulation; }
 
 @media (max-width: 760px) {
   .sku-entry { grid-template-columns: minmax(0, 1fr) 110px 68px; }
@@ -296,10 +323,9 @@
   .suggestions .suggestion { min-height: 50px; padding: 12px; touch-action: manipulation; }
   .mobile-sku-options .ratio-hover-detail { display: block; }
 
-  .mobile-sku-dialog { height: min(88dvh, 720px); padding: 0; }
-  .mobile-sku-dialog[open] { display: flex; flex-direction: column; }
-  .mobile-sku-dialog .dialog-title { flex: 0 0 auto; }
-  .mobile-sku-dialog .mobile-picker-body { flex: 1 1 auto; }
+  .mobile-sku-panel { height: min(88vh, 720px); height: min(88dvh, 720px); }
+  .mobile-sku-panel .dialog-title { flex: 0 0 auto; }
+  .mobile-sku-panel .mobile-picker-body { flex: 1 1 auto; }
 
   .dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dimensions label:last-child { grid-column: 1 / -1; }
