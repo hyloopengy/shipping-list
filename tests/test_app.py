@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -10,7 +11,7 @@ TEST_DIR = tempfile.TemporaryDirectory()
 os.environ["PACKING_DATA_DIR"] = TEST_DIR.name
 os.environ["PACKING_DB_PATH"] = str(Path(TEST_DIR.name) / "test.db")
 
-from app import BACKUP_DIR, IS_POSTGRES, app  # noqa: E402
+from app import BACKUP_DIR, IS_POSTGRES, app, daily_backup  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
 
 
@@ -44,7 +45,8 @@ class PackingFlowTest(unittest.TestCase):
         self.assertEqual(imported["summary"]["planned"], 87)
         self.assertEqual(imported["batch"]["internal_order"], "测试内部单号")
 
-        sku, second_sku = imported["skus"][:2]
+        sku = next(row for row in imported["skus"] if row["sku_code"] == "MTWT01138")
+        second_sku = next(row for row in imported["skus"] if row["sku_code"] == "MTWT01105")
         payload = {
             "package_no": "2#", "clone_count": 2,
             "length_cm": 50, "width_cm": 40, "height_cm": 30, "weight_kg": 12.5,
@@ -77,6 +79,9 @@ class PackingFlowTest(unittest.TestCase):
         self.assertEqual(book["发货清单"]["D6"].value, 6)
         self.assertEqual(list(book["发货清单"].merged_cells.ranges), [])
         self.assertEqual(book["发货清单"]["F2"].value, 37.5)
+        self.assertEqual(book["发货清单"]["I5"].value, "体积(m³)")
+        self.assertEqual(book["发货清单"]["I6"].value, 0.06)
+        self.assertEqual(book["发货清单"]["H2"].value, 0.18)
 
         latest = forced.get_json()["data"]
         package_two = next(p for p in latest["packages"] if p["package_no"] == 2)
@@ -161,6 +166,7 @@ class PackingFlowTest(unittest.TestCase):
         package = created.get_json()["data"]["packages"][0]
         self.assertIsNone(package["length_cm"])
         self.assertIsNone(package["weight_kg"])
+        self.assertIsNone(package["volume_m3"])
 
     def test_batch_ratios_mixed_package_snapshot_and_excel(self):
         imported = self.import_source("配比测试")
@@ -272,7 +278,7 @@ class PackingFlowTest(unittest.TestCase):
         )
         self.assertEqual(malformed_package.status_code, 400)
 
-        local_sku = second_batch["skus"][0]
+        local_sku = next(row for row in second_batch["skus"] if row["planned_qty"] == 12)
         ratio = self.client.post(
             f'/api/batches/{second_batch["batch"]["id"]}/ratios',
             json={"items": [{"sku_id": local_sku["id"], "quantity": 7}]}, headers=self.csrf,
@@ -309,6 +315,96 @@ class PackingFlowTest(unittest.TestCase):
         self.assertGreaterEqual(len(history), 5)
         self.assertLessEqual(len(history), 100)
         self.assertLessEqual(len(latest), 3)
+
+    def test_sku_sort_volume_auto_allocation_and_backup_download(self):
+        imported = self.import_source("自动配比测试")
+        batch_id = imported["batch"]["id"]
+        self.assertEqual(
+            [row["sku_code"] for row in imported["skus"]],
+            ["JYMK02533", "MTWT01105", "MTWT01138", "MTWT01139"],
+        )
+
+        chosen = imported["skus"][:3]
+        payload = {
+            "mode": "balanced", "start_package_no": "100#", "package_count": 7,
+            "selected_sku_ids": [row["id"] for row in chosen],
+        }
+        preview_response = self.client.post(
+            f"/api/batches/{batch_id}/auto-allocation/preview", json=payload, headers=self.csrf,
+        )
+        self.assertEqual(preview_response.status_code, 200, preview_response.get_json())
+        preview = preview_response.get_json()
+        self.assertEqual(preview["unallocated"], 0)
+        self.assertLessEqual(preview["max_package_quantity"] - preview["min_package_quantity"], 1)
+        expected = {row["id"]: row["remaining_qty"] for row in chosen}
+        actual = {}
+        for package in preview["packages"]:
+            for item in package["items"]:
+                actual[item["sku_id"]] = actual.get(item["sku_id"], 0) + item["quantity"]
+        self.assertEqual(actual, expected)
+
+        commit = self.client.post(
+            f"/api/batches/{batch_id}/auto-allocation/commit",
+            json=payload | {"preview_token": preview["preview_token"]}, headers=self.csrf,
+        )
+        self.assertEqual(commit.status_code, 201, commit.get_json())
+        self.assertEqual(commit.get_json()["created"], [f"{number}#" for number in range(100, 107)])
+        self.assertEqual(commit.get_json()["data"]["summary"]["packed"], preview["selected_total"])
+
+        last_sku = imported["skus"][3]
+        stale_payload = {
+            "mode": "balanced", "start_package_no": 200, "package_count": 2,
+            "selected_sku_ids": [last_sku["id"]],
+        }
+        stale_preview = self.client.post(
+            f"/api/batches/{batch_id}/auto-allocation/preview", json=stale_payload, headers=self.csrf,
+        ).get_json()
+        changed_inventory = self.client.post(
+            f"/api/batches/{batch_id}/packages",
+            json={"package_no": 90, "clone_count": 1,
+                  "items": [{"sku_id": last_sku["id"], "quantity": 1}]}, headers=self.csrf,
+        )
+        self.assertEqual(changed_inventory.status_code, 201, changed_inventory.get_json())
+        stale_commit = self.client.post(
+            f"/api/batches/{batch_id}/auto-allocation/commit",
+            json=stale_payload | {"preview_token": stale_preview["preview_token"]}, headers=self.csrf,
+        )
+        self.assertEqual(stale_commit.status_code, 409)
+        self.assertIn("重新预览", stale_commit.get_json()["error"])
+
+        conflict_preview = self.client.post(
+            f"/api/batches/{batch_id}/auto-allocation/preview",
+            json={"mode": "balanced", "start_package_no": 100, "package_count": 1,
+                  "selected_sku_ids": [imported["skus"][3]["id"]]}, headers=self.csrf,
+        ).get_json()
+        conflict = self.client.post(
+            f"/api/batches/{batch_id}/auto-allocation/commit",
+            json={"mode": "balanced", "start_package_no": 100, "package_count": 1,
+                  "selected_sku_ids": [imported["skus"][3]["id"],],
+                  "preview_token": conflict_preview["preview_token"]}, headers=self.csrf,
+        )
+        self.assertEqual(conflict.status_code, 409)
+        self.assertIn("大包号已存在", conflict.get_json()["error"])
+
+        valid_backup = BACKUP_DIR / "packing-20990101-010101.sql.gz"
+        valid_backup.write_bytes(b"backup-test")
+        invalid_backup = BACKUP_DIR / "secret.txt"
+        invalid_backup.write_text("no", encoding="utf-8")
+        backups = self.client.get("/api/backups").get_json()
+        self.assertTrue(any(row["filename"] == valid_backup.name for row in backups))
+        downloaded = self.client.get(f"/api/backups/{valid_backup.name}")
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertEqual(downloaded.data, b"backup-test")
+        downloaded.close()
+        self.assertEqual(self.client.get("/api/backups/secret.txt").status_code, 400)
+
+        if not IS_POSTGRES:
+            old = BACKUP_DIR / "packing-2000-01-01.db"
+            old.write_bytes(b"old")
+            old_time = time.time() - 9 * 24 * 60 * 60
+            os.utime(old, (old_time, old_time))
+            daily_backup()
+            self.assertFalse(old.exists())
 
 
 if __name__ == "__main__":

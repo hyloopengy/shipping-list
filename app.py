@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import os
 import re
 import sqlite3
 import secrets
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file, session
@@ -24,6 +25,7 @@ IS_POSTGRES = DATABASE_URL.startswith(("postgresql://", "postgres://"))
 
 REQUIRED_HEADERS = {"商品编码", "商品名", "款式编码", "颜色规格", "数量"}
 PACKAGE_RE = re.compile(r"^\s*(\d+)\s*#?\s*$")
+BACKUP_RE = re.compile(r"^packing-[0-9-]+\.(?:db|sql\.gz)$")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
@@ -244,6 +246,10 @@ def daily_backup() -> None:
         destination.close()
         source.close()
     temp.replace(target)
+    cutoff = datetime.now() - timedelta(days=7)
+    for backup in BACKUP_DIR.glob("packing-*.db"):
+        if datetime.fromtimestamp(backup.stat().st_mtime) < cutoff:
+            backup.unlink()
 
 
 def now() -> str:
@@ -297,6 +303,55 @@ def as_optional_weight(value) -> float | None:
     if value is None or str(value).strip() == "":
         return None
     return as_weight(value)
+
+
+def natural_key(value: object) -> tuple:
+    return tuple(int(part) if part.isdigit() else part.casefold() for part in re.split(r"(\d+)", str(value or "")))
+
+
+def split_color_size(value: object) -> tuple[str, str]:
+    parts = [part.strip() for part in re.split(r"[;；/|]", str(value or "")) if part.strip()]
+    return (" ".join(parts[:-1]), parts[-1]) if len(parts) > 1 else (str(value or "").strip(), "")
+
+
+def size_key(value: object) -> tuple:
+    raw = str(value or "").strip().upper().replace(" ", "")
+    raw = {"2XL": "XXL", "3XL": "XXXL"}.get(raw, raw)
+    order = {"XXS": 0, "XS": 1, "S": 2, "M": 3, "L": 4, "XL": 5, "XXL": 6, "XXXL": 7}
+    if raw in order:
+        return (0, order[raw], ())
+    match = re.fullmatch(r"(\d+)XL", raw)
+    if match:
+        return (0, 4 + int(match.group(1)), ())
+    if raw in {"均码", "F", "FREE", "ONESIZE"}:
+        return (1, 0, ())
+    return (2, 0, natural_key(raw))
+
+
+def sku_sort_key(row) -> tuple:
+    color, size = split_color_size(row["color_spec"])
+    return (natural_key(row["style_code"]), natural_key(color), size_key(size), natural_key(row["sku_code"]))
+
+
+def package_volume(row) -> float | None:
+    values = [row[key] for key in ("length_cm", "width_cm", "height_cm")]
+    if any(value is None for value in values):
+        return None
+    return round(float(values[0]) * float(values[1]) * float(values[2]) / 1_000_000, 6)
+
+
+def package_dict(row) -> dict:
+    return dict(row) | {"package_label": f'{row["package_no"]}#', "volume_m3": package_volume(row)}
+
+
+def lock_batch(conn: Connection, batch_id: int) -> None:
+    suffix = " FOR UPDATE" if IS_POSTGRES else ""
+    if not conn.execute(f"SELECT id FROM batches WHERE id=?{suffix}", (batch_id,)).fetchone():
+        raise LookupError("批次不存在")
+
+
+def is_unique_violation(exc: Exception) -> bool:
+    return isinstance(exc, sqlite3.IntegrityError) or getattr(exc, "sqlstate", None) == "23505"
 
 
 def ratio_detail(name: str, items: list[dict]) -> str:
@@ -373,15 +428,16 @@ def batch_payload(conn: sqlite3.Connection, batch_id: int) -> dict:
     batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
     if not batch:
         raise LookupError("批次不存在")
-    skus = conn.execute(
+    skus = list(conn.execute(
         """
         SELECT s.*, COALESCE(SUM(pi.quantity), 0) packed_qty
         FROM skus s
         LEFT JOIN package_items pi ON pi.sku_id=s.id
-        WHERE s.batch_id=? GROUP BY s.id ORDER BY s.id
+        WHERE s.batch_id=? GROUP BY s.id
         """,
         (batch_id,),
-    ).fetchall()
+    ).fetchall())
+    skus.sort(key=sku_sort_key)
     packages = conn.execute(
         """
         SELECT p.*, COALESCE(SUM(pi.quantity),0) total_qty, COUNT(pi.id) item_count
@@ -403,7 +459,7 @@ def batch_payload(conn: sqlite3.Connection, batch_id: int) -> dict:
         },
         "skus": [dict(row) | {"remaining_qty": row["planned_qty"] - row["packed_qty"]} for row in skus],
         "ratios": batch_ratios(conn, batch_id),
-        "packages": [dict(row) | {"package_label": f'{row["package_no"]}#'} for row in packages],
+        "packages": [package_dict(row) for row in packages],
     }
 
 
@@ -844,6 +900,7 @@ def create_package(batch_id):
     payload = request.get_json(force=True)
     try:
         with db() as conn:
+            lock_batch(conn, batch_id)
             checked = validate_package(conn, batch_id, payload)
             if checked["overages"] and not payload.get("force"):
                 return jsonify(error="保存后将超过清单数量", overages=checked["overages"]), 409
@@ -862,6 +919,10 @@ def create_package(batch_id):
         return jsonify(created=[f"{n}#" for n in checked["target_nos"]], data=result), 201
     except (ValueError, LookupError) as exc:
         return jsonify(error=str(exc)), 400
+    except Exception as exc:
+        if is_unique_violation(exc):
+            return jsonify(error="大包号已存在，请刷新批次后重试"), 409
+        raise
 
 
 @app.get("/api/packages/<int:package_id>")
@@ -871,8 +932,8 @@ def get_package(package_id):
         if not package:
             return jsonify(error="大包不存在"), 404
         items = conn.execute("SELECT sku_id,quantity FROM package_items WHERE package_id=? ORDER BY sort_order", (package_id,)).fetchall()
-        return jsonify(dict(package) | {
-            "package_label": f'{package["package_no"]}#', "items": [dict(r) for r in items],
+        return jsonify(package_dict(package) | {
+            "items": [dict(r) for r in items],
             "entries": package_entries_payload(conn, package_id),
         })
 
@@ -885,6 +946,7 @@ def update_package(package_id):
             original = conn.execute("SELECT * FROM packages WHERE id=?", (package_id,)).fetchone()
             if not original:
                 return jsonify(error="大包不存在"), 404
+            lock_batch(conn, original["batch_id"])
             payload["clone_count"] = 1
             checked = validate_package(conn, original["batch_id"], payload, package_id)
             if checked["overages"] and not payload.get("force"):
@@ -909,11 +971,157 @@ def delete_package(package_id):
         row = conn.execute("SELECT batch_id FROM packages WHERE id=?", (package_id,)).fetchone()
         if not row:
             return jsonify(error="大包不存在"), 404
+        lock_batch(conn, row["batch_id"])
         conn.execute("DELETE FROM packages WHERE id=?", (package_id,))
         conn.execute("UPDATE batches SET updated_at=? WHERE id=?", (now(), row["batch_id"]))
         result = batch_payload(conn, row["batch_id"])
     daily_backup()
     return jsonify(data=result)
+
+
+def allocation_preview(conn: Connection, batch_id: int, payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("请求数据格式不正确")
+    if payload.get("mode", "balanced") != "balanced":
+        raise ValueError("暂不支持该分配模式")
+    start_no = parse_package_no(payload.get("start_package_no"))
+    package_count = as_positive_int(payload.get("package_count"), "大包数量")
+    if package_count > 500:
+        raise ValueError("一次最多生成500个大包")
+    raw_ids = payload.get("selected_sku_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise ValueError("请至少选择一个款色尺码")
+    try:
+        selected_ids = list(dict.fromkeys(int(value) for value in raw_ids))
+    except (TypeError, ValueError):
+        raise ValueError("款色尺码选择不正确")
+    placeholders = ",".join("?" for _ in selected_ids)
+    rows = list(conn.execute(
+        f"""SELECT s.*,s.planned_qty-COALESCE(SUM(pi.quantity),0) remaining_qty
+            FROM skus s LEFT JOIN package_items pi ON pi.sku_id=s.id
+            WHERE s.batch_id=? AND s.id IN ({placeholders}) GROUP BY s.id""",
+        (batch_id, *selected_ids),
+    ).fetchall())
+    if len(rows) != len(selected_ids):
+        raise ValueError("选择中存在不属于当前批次的款色尺码")
+    rows.sort(key=sku_sort_key)
+    selected = [row for row in rows if row["remaining_qty"] > 0]
+    if len(selected) != len(rows):
+        raise ValueError("所选款色尺码中有库存已经用完，请刷新后重选")
+    selected_total = sum(row["remaining_qty"] for row in selected)
+    if package_count > selected_total:
+        raise ValueError(f"大包数量不能超过所选剩余件数 {selected_total}")
+
+    totals = [0] * package_count
+    package_items: list[dict[int, int]] = [dict() for _ in range(package_count)]
+    cursor = 0
+    for sku in selected:
+        quantity = int(sku["remaining_qty"])
+        base, remainder = divmod(quantity, package_count)
+        if base:
+            for index in range(package_count):
+                package_items[index][sku["id"]] = base
+                totals[index] += base
+        for _ in range(remainder):
+            index = min(range(package_count), key=lambda i: (totals[i], (i - cursor) % package_count))
+            package_items[index][sku["id"]] = package_items[index].get(sku["id"], 0) + 1
+            totals[index] += 1
+            cursor = (index + 1) % package_count
+
+    labels = {row["id"]: row["display_label"] for row in selected}
+    packages = [{
+        "package_no": start_no + index,
+        "package_label": f"{start_no + index}#",
+        "total_quantity": totals[index],
+        "items": [{"sku_id": sku_id, "label": labels[sku_id], "quantity": quantity}
+                  for sku_id, quantity in package_items[index].items()],
+    } for index in range(package_count)]
+    signature_source = "|".join([
+        str(batch_id), "balanced", str(start_no), str(package_count),
+        *(f'{row["id"]}:{row["remaining_qty"]}' for row in selected),
+    ])
+    return {
+        "mode": "balanced", "start_package_no": start_no, "package_count": package_count,
+        "selected_total": selected_total, "unallocated": selected_total - sum(totals),
+        "min_package_quantity": min(totals), "max_package_quantity": max(totals),
+        "preview_token": hashlib.sha256(signature_source.encode()).hexdigest(), "packages": packages,
+    }
+
+
+@app.post("/api/batches/<int:batch_id>/auto-allocation/preview")
+def preview_auto_allocation(batch_id):
+    try:
+        with db() as conn:
+            if not conn.execute("SELECT id FROM batches WHERE id=?", (batch_id,)).fetchone():
+                return jsonify(error="批次不存在"), 404
+            return jsonify(allocation_preview(conn, batch_id, request.get_json(force=True)))
+    except (ValueError, LookupError) as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@app.post("/api/batches/<int:batch_id>/auto-allocation/commit")
+def commit_auto_allocation(batch_id):
+    payload = request.get_json(force=True)
+    try:
+        with db() as conn:
+            lock_batch(conn, batch_id)
+            preview = allocation_preview(conn, batch_id, payload)
+            if not secrets.compare_digest(str(payload.get("preview_token") or ""), preview["preview_token"]):
+                return jsonify(error="库存或参数已变化，请重新预览后再生成"), 409
+            target_nos = [row["package_no"] for row in preview["packages"]]
+            placeholders = ",".join("?" for _ in target_nos)
+            conflicts = conn.execute(
+                f"SELECT package_no FROM packages WHERE batch_id=? AND package_no IN ({placeholders})",
+                (batch_id, *target_nos),
+            ).fetchall()
+            if conflicts:
+                labels = "、".join(f'{row["package_no"]}#' for row in conflicts)
+                return jsonify(error=f"大包号已存在：{labels}"), 409
+            stamp = now()
+            for package in preview["packages"]:
+                package_id = insert_id(
+                    conn,
+                    """INSERT INTO packages(batch_id,package_no,length_cm,width_cm,height_cm,weight_kg,created_at,updated_at)
+                       VALUES(?,?,?,?,?,?,?,?)""",
+                    (batch_id, package["package_no"], None, None, None, None, stamp, stamp),
+                )
+                entries = [{
+                    "entry_type": "sku", "sku_id": item["sku_id"], "ratio_id": None,
+                    "label": item["label"], "units_per_pack": 1, "pack_count": item["quantity"],
+                    "items": [{"sku_id": item["sku_id"], "label": item["label"], "quantity_per_pack": 1}],
+                } for item in package["items"]]
+                flattened = {item["sku_id"]: item["quantity"] for item in package["items"]}
+                write_package_contents(conn, package_id, entries, flattened)
+            conn.execute("UPDATE batches SET updated_at=? WHERE id=?", (stamp, batch_id))
+            result = batch_payload(conn, batch_id)
+        daily_backup()
+        return jsonify(created=[row["package_label"] for row in preview["packages"]], data=result), 201
+    except (ValueError, LookupError) as exc:
+        return jsonify(error=str(exc)), 400
+    except Exception as exc:
+        if is_unique_violation(exc):
+            return jsonify(error="大包号已存在，请刷新批次并重新预览"), 409
+        raise
+
+
+@app.get("/api/backups")
+def list_backups():
+    rows = []
+    for path in BACKUP_DIR.iterdir():
+        if path.is_file() and BACKUP_RE.fullmatch(path.name):
+            rows.append({"filename": path.name, "size": path.stat().st_size,
+                         "modified_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")})
+    return jsonify(sorted(rows, key=lambda row: row["modified_at"], reverse=True)[:7])
+
+
+@app.get("/api/backups/<path:filename>")
+def download_backup(filename):
+    if not BACKUP_RE.fullmatch(filename) or Path(filename).name != filename:
+        return jsonify(error="备份文件名无效"), 400
+    path = (BACKUP_DIR / filename).resolve()
+    if path.parent != BACKUP_DIR.resolve() or not path.is_file():
+        return jsonify(error="备份不存在"), 404
+    return send_file(path, as_attachment=True, download_name=filename, mimetype="application/octet-stream")
 
 
 @app.get("/api/batches/<int:batch_id>/export")
@@ -926,8 +1134,9 @@ def export_batch(batch_id):
         ws = book.active
         ws.title = "发货清单"
         total_weight = sum(float(p["weight_kg"]) for p in packages if p["weight_kg"] is not None)
+        total_volume = sum(package_volume(p) or 0 for p in packages)
         ws.append(["批次号", batch["batch_no"], "内部单号", batch["internal_order"], "导出时间", datetime.now().strftime("%Y-%m-%d %H:%M")])
-        ws.append(["总大包数", data["summary"]["packages"], "总件数", data["summary"]["packed"], "已填总重量(kg)", round(total_weight, 2)])
+        ws.append(["总大包数", data["summary"]["packages"], "总件数", data["summary"]["packed"], "总重量(kg)", round(total_weight, 2), "总体积(m³)", round(total_volume, 6)])
         ws.append(["原文件", batch["source_filename"]])
         ws.append([])
         has_ratios = bool(conn.execute(
@@ -935,9 +1144,9 @@ def export_batch(batch_id):
                WHERE p.batch_id=? AND pe.entry_type='ratio' LIMIT 1""", (batch_id,)
         ).fetchone())
         headers = (
-            ["大包号", "款色尺码/配比明细", "数量", "中包件数", "中包数量", "总数量", "长(cm)", "宽(cm)", "高(cm)", "重量(kg)"]
+            ["大包号", "款色尺码/配比明细", "数量", "中包件数", "中包数量", "总数量", "长(cm)", "宽(cm)", "高(cm)", "重量(kg)", "体积(m³)"]
             if has_ratios else
-            ["大包号", "款色尺码", "数量", "总数量", "长(cm)", "宽(cm)", "高(cm)", "重量(kg)"]
+            ["大包号", "款色尺码", "数量", "总数量", "长(cm)", "宽(cm)", "高(cm)", "重量(kg)", "体积(m³)"]
         )
         ws.append(headers)
         for package in packages:
@@ -969,7 +1178,7 @@ def export_batch(batch_id):
                 ws.append([
                     f'{package["package_no"]}#', "\n".join(detail_lines), column_text(quantity_lines),
                     column_text(middle_unit_lines), column_text(middle_count_lines), total,
-                    package["length_cm"], package["width_cm"], package["height_cm"], package["weight_kg"],
+                    package["length_cm"], package["width_cm"], package["height_cm"], package["weight_kg"], package_volume(package),
                 ])
                 ws.row_dimensions[ws.max_row].height = 18 * max(1, len(detail_lines))
             else:
@@ -981,7 +1190,7 @@ def export_batch(batch_id):
                 ws.append([
                     f'{package["package_no"]}#', "\n".join(item["display_label"] for item in items),
                     "\n".join(str(item["quantity"]) for item in items), total,
-                    package["length_cm"], package["width_cm"], package["height_cm"], package["weight_kg"],
+                    package["length_cm"], package["width_cm"], package["height_cm"], package["weight_kg"], package_volume(package),
                 ])
                 ws.row_dimensions[ws.max_row].height = 18 * max(1, len(items))
         navy, thin = "17324D", Side(style="thin", color="D6DEE6")
@@ -995,8 +1204,13 @@ def export_batch(batch_id):
                 cell.alignment = Alignment(vertical="center", wrap_text=True)
         ws.freeze_panes = "A6"
         ws.auto_filter.ref = ws.dimensions
-        widths = [12, 68, 10, 12, 12, 12, 10, 10, 10, 12] if has_ratios else [12, 55, 10, 10, 10, 10, 10, 12]
+        widths = [12, 68, 10, 12, 12, 12, 10, 10, 10, 12, 14] if has_ratios else [12, 55, 10, 10, 10, 10, 10, 12, 14]
         for idx, width in enumerate(widths, 1): ws.column_dimensions[chr(64 + idx)].width = width
+        for column, width in {"C": 12, "D": 18, "E": 12, "F": 18, "G": 14, "H": 14}.items():
+            ws.column_dimensions[column].width = max(ws.column_dimensions[column].width or 0, width)
+        volume_column = 11 if has_ratios else 9
+        for row in ws.iter_rows(min_row=6, min_col=volume_column, max_col=volume_column):
+            row[0].number_format = "0.000000"
         output = io.BytesIO()
         book.save(output)
         output.seek(0)

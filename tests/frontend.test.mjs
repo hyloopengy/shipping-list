@@ -122,6 +122,65 @@ test('批次只在点击查询后搜索历史，并显示大包缺失重量', as
   assert.equal(calls.includes('/api/batches?q=20260720'), true);
   assert.match(window.document.getElementById('packageList').textContent, /体重未填/);
   assert.match(window.document.getElementById('packageList').textContent, /长未填/);
+  assert.match(window.document.getElementById('packageList').textContent, /体积未算/);
+});
+
+
+test('长宽高自动计算体积，自动配比先预览再确认生成', async () => {
+  let previewPayload;
+  let commitPayload;
+  const allocated = structuredClone(batch);
+  allocated.packages = [
+    { id: 31, package_no: 1, package_label: '1#', item_count: 2, total_qty: 4, volume_m3: null },
+    { id: 32, package_no: 2, package_label: '2#', item_count: 2, total_qty: 4, volume_m3: null },
+  ];
+  allocated.summary = { ...allocated.summary, packages: 2, packed: 8, remaining: 0 };
+  const window = await boot(async (url, options={}) => {
+    const path = String(url);
+    if (path === '/api/batches?q=') return { ok: true, status: 200, json: async () => [{ id: 1, batch_no: '20260722-001' }] };
+    if (path === '/api/batches/1') return { ok: true, status: 200, json: async () => structuredClone(batch) };
+    if (path.endsWith('/auto-allocation/preview')) {
+      previewPayload = JSON.parse(options.body);
+      return { ok: true, status: 200, json: async () => ({
+        mode:'balanced', start_package_no:1, package_count:2, selected_total:8,
+        unallocated:0, min_package_quantity:4, max_package_quantity:4, preview_token:'token-1',
+        packages:[
+          { package_no:1, package_label:'1#', total_quantity:4, items:[{ sku_id:11, label:batch.skus[0].display_label, quantity:3 },{ sku_id:12, label:batch.skus[1].display_label, quantity:1 }] },
+          { package_no:2, package_label:'2#', total_quantity:4, items:[{ sku_id:11, label:batch.skus[0].display_label, quantity:2 },{ sku_id:12, label:batch.skus[1].display_label, quantity:2 }] },
+        ],
+      }) };
+    }
+    if (path.endsWith('/auto-allocation/commit')) {
+      commitPayload = JSON.parse(options.body);
+      return { ok: true, status: 201, json: async () => ({ created:['1#','2#'], data:structuredClone(allocated) }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  });
+
+  for (const [id,value] of [['lengthCm','50'],['widthCm','40'],['heightCm','30']]) {
+    const input = window.document.getElementById(id); input.value = value;
+    input.dispatchEvent(new window.Event('input', { bubbles:true }));
+  }
+  assert.equal(window.document.getElementById('volumeM3').value, '0.060000');
+  window.document.getElementById('heightCm').value = '';
+  window.document.getElementById('heightCm').dispatchEvent(new window.Event('input', { bubbles:true }));
+  assert.equal(window.document.getElementById('volumeM3').value, '');
+
+  window.document.getElementById('autoAllocationBtn').click();
+  assert.equal(window.document.querySelectorAll('[data-auto-sku-id]').length, 2);
+  window.document.getElementById('autoPackageCount').value = '2';
+  window.document.getElementById('previewAutoAllocation').click();
+  await waitFor(() => previewPayload);
+  assert.deepEqual(previewPayload.selected_sku_ids, [11,12]);
+  assert.equal(previewPayload.mode, 'balanced');
+  await waitFor(() => !window.document.getElementById('autoPreview').hidden);
+  assert.match(window.document.getElementById('autoPreview').textContent, /所选 8 件.*每包 4–4 件.*未分配 0/s);
+  window.document.getElementById('commitAutoAllocation').click();
+  await waitFor(() => commitPayload);
+  assert.equal(commitPayload.preview_token, 'token-1');
+  await waitFor(() => !window.document.getElementById('autoAllocationDialog').open);
+  assert.equal(window.document.getElementById('autoAllocationDialog').open, false);
+  assert.equal(window.document.getElementById('mPackages').textContent, '2');
 });
 
 

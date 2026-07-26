@@ -36,7 +36,7 @@
           <div><b id="mRemaining">0</b><span>未装</span></div>
           <div class="danger"><b id="mOver">0</b><span>超装</span></div>
         </div>
-        <a id="exportBtn" class="button ghost">导出 Excel</a>
+        <div class="batch-actions"><button id="backupBtn" class="ghost" type="button">数据备份</button><a id="exportBtn" class="button ghost">导出 Excel</a></div>
       </div>
 
       <div class="workgrid">
@@ -57,6 +57,7 @@
             <label class="qty-label">数量 <span id="qtyReference" class="muted"></span><input id="skuQty" type="number" min="1" placeholder="先选择款色尺码"></label>
             <button id="addSku" class="secondary">添加</button>
             <button id="ratioManagerBtn" class="ghost" type="button">配比管理</button>
+            <button id="autoAllocationBtn" class="ghost" type="button">自动循环配比</button>
           </div>
 
           <div class="items-wrap">
@@ -72,6 +73,7 @@
             <label>宽 <span>cm</span><input id="widthCm" type="number" min="1" step="1"></label>
             <label>高 <span>cm</span><input id="heightCm" type="number" min="1" step="1"></label>
             <label>重量 <span>kg</span><input id="weightKg" type="number" min="0.01" step="0.01"></label>
+            <label>体积 <span>m³</span><input id="volumeM3" readonly placeholder="体积未算"></label>
           </div>
           <div class="field-hint dimensions-hint">长、宽、高、重量均可暂不填写；已保存大包会明确提示缺少的信息。</div>
           <button id="savePackage" class="primary wide">保存并继续下一个大包</button>
@@ -101,6 +103,29 @@
       <label>内部单号<input name="internal_order" type="text" placeholder="本批次填写一次，将显示在导出表头" required></label>
       <button class="primary wide" type="submit">导入并开始装箱</button>
     </form>
+  </dialog>
+
+  <dialog id="autoAllocationDialog" class="auto-allocation-dialog">
+    <div class="dialog-title"><span>自动循环配比</span><button class="close" type="button" id="closeAutoAllocation">×</button></div>
+    <div class="auto-allocation-body">
+      <div class="field-hint">把所选剩余库存尽量平均分到连续的新大包中；不会修改已有大包。</div>
+      <div class="row package-row">
+        <label>起始大包号<input id="autoStartNo" inputmode="numeric" placeholder="例如 20#"></label>
+        <label>生成大包数<input id="autoPackageCount" type="number" min="1" max="500" value="1"></label>
+      </div>
+      <label>筛选款色尺码<input id="autoSkuFilter" placeholder="输入款号、颜色、尺码或商品编码"></label>
+      <div class="auto-select-actions"><label><input id="autoSelectAll" type="checkbox" checked> 全选当前筛选结果</label><span id="autoSelectedSummary" class="muted"></span></div>
+      <div id="autoSkuList" class="auto-sku-list"></div>
+      <button id="previewAutoAllocation" class="secondary wide" type="button">计算并预览</button>
+      <section id="autoPreview" class="auto-preview" hidden></section>
+      <button id="commitAutoAllocation" class="primary wide" type="button" disabled>确认生成这些大包</button>
+    </div>
+  </dialog>
+
+  <dialog id="backupDialog">
+    <div class="dialog-title"><span>最近7份数据备份</span><button class="close" type="button" id="closeBackupDialog">×</button></div>
+    <div id="backupList" class="backup-list"></div>
+    <div class="dialog-actions"><button class="primary" type="button" id="closeBackupButton">关闭</button></div>
   </dialog>
 
   <dialog id="ratioDialog" class="ratio-dialog">
@@ -146,6 +171,6 @@
   </dialog>
 
   <div id="toast" class="toast"></div>
-  <script src="{{ url_for('static', filename='app.js', v='20260722-6') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20260726-1') }}"></script>
 </body>
 </html>

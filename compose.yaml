@@ -33,6 +33,7 @@ services:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
     volumes:
       - packing-uploads:/app/data
+      - ./backups:/app/data/backups:ro
 
   caddy:
     image: ${CADDY_IMAGE:-caddy:2.10-alpine}

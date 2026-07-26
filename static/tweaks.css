@@ -79,8 +79,31 @@
 }
 
 .sku-entry {
-  grid-template-columns: minmax(0, 1fr) 125px 72px 96px;
+  grid-template-columns: minmax(0, 1fr) 125px 72px 96px 122px;
 }
+
+.dimensions { grid-template-columns: repeat(5, 1fr); }
+.dimensions input[readonly] { background: #f5f8fb; color: #47617c; }
+.batch-actions { display: flex; gap: 8px; }
+
+.auto-allocation-dialog { width: min(900px, 95vw); }
+.auto-allocation-body { padding: 0 22px 22px; }
+.auto-allocation-body > label { margin: 14px 0 7px; }
+.auto-select-actions { display: flex; justify-content: space-between; align-items: center; margin: 10px 0 7px; }
+.auto-select-actions label { margin: 0; }
+.auto-sku-list { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; }
+.auto-sku-list > label { display: flex; gap: 9px; align-items: flex-start; margin: 0; padding: 9px 11px; border-bottom: 1px solid #edf1f4; cursor: pointer; }
+.auto-sku-list > label:last-child { border-bottom: 0; }
+.auto-sku-list input { width: auto; margin-top: 4px; }
+.auto-sku-list span { min-width: 0; }
+.auto-sku-list small,.backup-row small { display: block; color: var(--muted); }
+.auto-preview { max-height: 310px; overflow: auto; margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; }
+.auto-summary { position: sticky; top: 0; z-index: 1; display: flex; gap: 18px; padding: 10px 12px; background: #eef4ff; }
+.auto-preview details { padding: 8px 12px; border-top: 1px solid #edf1f4; }
+.auto-preview summary { cursor: pointer; }
+.auto-preview ul { margin: 7px 0 2px; padding-left: 22px; }
+.backup-list { margin: 0 22px 18px; max-height: 420px; overflow: auto; }
+.backup-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 
 .suggestion .ratio-hover-detail {
   display: none;
@@ -191,7 +214,8 @@
 
 @media (max-width: 760px) {
   .sku-entry { grid-template-columns: minmax(0, 1fr) 110px 68px; }
-  .sku-entry #ratioManagerBtn { grid-column: 1 / -1; }
+  .sku-entry #ratioManagerBtn,.sku-entry #autoAllocationBtn { grid-column: auto; }
+  .dimensions { grid-template-columns: repeat(2,1fr); }
   .ratio-card { grid-template-columns: 70px 1fr; }
   .ratio-card .actions { grid-column: 1 / -1; justify-content: flex-end; }
   .ratio-entry { grid-template-columns: 1fr 110px 68px; }

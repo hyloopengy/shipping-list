@@ -3,6 +3,7 @@ const state = {
   batches: [], data: null, items: [], selectedOption: null, matches: [], matchIndex: 0,
   editingId: null, editingOriginal: {}, pendingPayload: null, duplicateId: null, batchSearchToken: 0, batchLoadToken: 0,
   ratioItems: [], selectedRatioSku: null, ratioMatches: [], editingRatioId: null,
+  autoSelected: new Set(), autoPreview: null,
 };
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
 
@@ -57,7 +58,13 @@ function packageMeasureHtml(packageRow) {
   const dimensions = [['长',packageRow.length_cm],['宽',packageRow.width_cm],['高',packageRow.height_cm]]
     .map(([label,value]) => value == null ? `<span class="missing">${label}未填</span>` : `${label}${value}cm`).join(' · ');
   const weight = packageRow.weight_kg == null ? '<span class="missing">体重未填</span>' : `${Number(packageRow.weight_kg).toFixed(2)}kg`;
-  return `${dimensions} · ${weight}`;
+  const volume = packageRow.volume_m3 == null ? '<span class="missing">体积未算</span>' : `体积${Number(packageRow.volume_m3).toFixed(6)}m³`;
+  return `${dimensions} · ${weight} · ${volume}`;
+}
+
+function updateVolume() {
+  const values = ['lengthCm','widthCm','heightCm'].map(id => Number($(id).value));
+  $('volumeM3').value = values.every(value => value > 0) ? (values.reduce((total,value) => total * value,1) / 1000000).toFixed(6) : '';
 }
 function renderPackages() {
   const list = $('packageList'); $('packageHint').textContent = `${state.data.packages.length}个大包`;
@@ -221,7 +228,7 @@ function updateCloneHint() {
 function resetEditor(suggest,nextStart=null) {
   const previous = Number($('packageNo').value.replace('#','')); state.items = []; state.selectedOption = null; state.editingId = null;
   state.editingOriginal = {}; state.pendingPayload = null; state.duplicateId = null;
-  ['skuSearch','skuQty','lengthCm','widthCm','heightCm','weightKg'].forEach(id => $(id).value = ''); $('cloneCount').value = 1;
+  ['skuSearch','skuQty','lengthCm','widthCm','heightCm','weightKg','volumeM3'].forEach(id => $(id).value = ''); $('cloneCount').value = 1;
   $('editorTitle').textContent = '录入新大包'; $('cancelEdit').hidden = true; $('cloneCount').disabled = false;
   if (suggest && (nextStart || previous)) { let candidate = nextStart || previous + 1; const used = new Set(state.data.packages.map(row => row.package_no)); while (used.has(candidate)) candidate += 1; $('packageNo').value = `${candidate}#`; }
   else if (!suggest) $('packageNo').value = '';
@@ -241,6 +248,7 @@ window.editPackage = async id => {
   state.editingOriginal = Object.fromEntries(row.items.map(item => [item.sku_id,item.quantity])); state.items = row.entries;
   $('packageNo').value = row.package_no; $('lengthCm').value = row.length_cm ?? ''; $('widthCm').value = row.width_cm ?? '';
   $('heightCm').value = row.height_cm ?? ''; $('weightKg').value = row.weight_kg ?? ''; $('cloneCount').value = 1; $('cloneCount').disabled = true;
+  updateVolume();
   $('editorTitle').textContent = `修改大包 ${row.package_label}`; $('cancelEdit').hidden = false; renderItems(); updateCloneHint(); window.scrollTo({top:0,behavior:'smooth'});
 };
 window.deletePackage = async (id,label) => {
@@ -312,9 +320,77 @@ window.deleteRatio = async (id,name) => {
   try { await api(`/api/ratios/${id}`,{method:'DELETE'}); state.data = await api(`/api/batches/${state.data.batch.id}`); renderAll(); renderRatioList(); toast(`${name}已删除`); } catch (error) { toast(error.message,true); }
 };
 
+function autoAllocationPayload() {
+  return {
+    mode:'balanced', start_package_no:$('autoStartNo').value, package_count:$('autoPackageCount').value,
+    selected_sku_ids:[...state.autoSelected], preview_token:state.autoPreview?.preview_token || '',
+  };
+}
+function invalidateAutoPreview() {
+  state.autoPreview = null; $('autoPreview').hidden = true; $('commitAutoAllocation').disabled = true;
+}
+function filteredAutoSkus() {
+  const words = normalize($('autoSkuFilter').value).split(' ').filter(Boolean);
+  return state.data.skus.filter(sku => sku.remaining_qty > 0 && words.every(word => normalize(sku.display_label).includes(word)));
+}
+function renderAutoSkuList() {
+  const rows = filteredAutoSkus();
+  $('autoSkuList').innerHTML = rows.length ? rows.map(sku =>
+    `<label><input type="checkbox" data-auto-sku-id="${sku.id}" ${state.autoSelected.has(sku.id) ? 'checked' : ''}>` +
+    `<span>${escapeHtml(sku.display_label)}<small>剩余 ${sku.remaining_qty} 件 · 仓位 ${escapeHtml(sku.warehouse || '-')}</small></span></label>`
+  ).join('') : '<div class="placeholder">没有可分配的款色尺码</div>';
+  $('autoSelectAll').checked = rows.length > 0 && rows.every(sku => state.autoSelected.has(sku.id));
+  const selectedRows = state.data.skus.filter(sku => state.autoSelected.has(sku.id));
+  $('autoSelectedSummary').textContent = `已选 ${selectedRows.length} 款，共 ${selectedRows.reduce((sum,sku) => sum + Math.max(0,sku.remaining_qty),0)} 件`;
+}
+function openAutoAllocation() {
+  state.autoSelected = new Set(state.data.skus.filter(sku => sku.remaining_qty > 0).map(sku => sku.id));
+  state.autoPreview = null; $('autoSkuFilter').value = ''; $('autoPackageCount').value = 1;
+  const used = new Set(state.data.packages.map(row => row.package_no)); let start = 1; while (used.has(start)) start += 1;
+  $('autoStartNo').value = `${start}#`; invalidateAutoPreview(); renderAutoSkuList(); $('autoAllocationDialog').showModal();
+}
+async function previewAutoAllocation() {
+  try {
+    const result = await api(`/api/batches/${state.data.batch.id}/auto-allocation/preview`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(autoAllocationPayload()),
+    });
+    state.autoPreview = result;
+    const packages = result.packages.map(row => `<details><summary><b>${row.package_label}</b> · ${row.total_quantity}件</summary><ul>${row.items.map(item => `<li>${escapeHtml(item.label)} × ${item.quantity}</li>`).join('')}</ul></details>`).join('');
+    $('autoPreview').innerHTML = `<div class="auto-summary"><b>所选 ${result.selected_total} 件</b><span>${result.package_count}个大包</span><span>每包 ${result.min_package_quantity}–${result.max_package_quantity} 件</span><span>未分配 ${result.unallocated}</span></div>${packages}`;
+    $('autoPreview').hidden = false; $('commitAutoAllocation').disabled = result.unallocated !== 0;
+  } catch (error) { invalidateAutoPreview(); toast(error.message,true); }
+}
+async function commitAutoAllocation() {
+  if (!state.autoPreview) return;
+  const button = $('commitAutoAllocation'); button.disabled = true; button.textContent = '正在生成…';
+  try {
+    const result = await api(`/api/batches/${state.data.batch.id}/auto-allocation/commit`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(autoAllocationPayload()),
+    });
+    state.data = result.data; $('autoAllocationDialog').close(); renderAll(); resetEditor(true);
+    toast(`已生成 ${result.created.length} 个大包：${result.created[0]}–${result.created.at(-1)}`);
+  } catch (error) { invalidateAutoPreview(); toast(error.message,true); }
+  finally { button.textContent = '确认生成这些大包'; if (state.autoPreview) button.disabled = false; }
+}
+function formatBytes(value) { return value < 1024 * 1024 ? `${Math.ceil(value / 1024)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`; }
+async function openBackups() {
+  try {
+    const rows = await api('/api/backups');
+    $('backupList').innerHTML = rows.length ? rows.map(row => `<div class="backup-row"><div><b>${escapeHtml(row.filename)}</b><small>${escapeHtml(row.modified_at.replace('T',' '))} · ${formatBytes(row.size)}</small></div><a class="button ghost" href="/api/backups/${encodeURIComponent(row.filename)}" download>下载</a></div>`).join('') : '<div class="placeholder">还没有可下载的备份</div>';
+    $('backupDialog').showModal();
+  } catch (error) { toast(error.message,true); }
+}
+
 $('newBatchBtn').onclick = openImport; $('batchSelect').onchange = event => { if (event.target.value) loadBatch(Number(event.target.value)); };
 $('savePackage').onclick = () => save(false); $('forceSave').onclick = () => save(true); $('addSku').onclick = addSelected;
 $('cancelEdit').onclick = () => resetEditor(false); $('diffSearch').oninput = renderDiff; $('ratioManagerBtn').onclick = openRatioManager;
+$('autoAllocationBtn').onclick = openAutoAllocation; $('closeAutoAllocation').onclick = () => $('autoAllocationDialog').close();
+$('previewAutoAllocation').onclick = previewAutoAllocation; $('commitAutoAllocation').onclick = commitAutoAllocation;
+$('autoSkuFilter').oninput = renderAutoSkuList;
+$('autoSkuList').onchange = event => { const id = Number(event.target.dataset.autoSkuId); if (!id) return; event.target.checked ? state.autoSelected.add(id) : state.autoSelected.delete(id); invalidateAutoPreview(); renderAutoSkuList(); };
+$('autoSelectAll').onchange = event => { for (const sku of filteredAutoSkus()) event.target.checked ? state.autoSelected.add(sku.id) : state.autoSelected.delete(sku.id); invalidateAutoPreview(); renderAutoSkuList(); };
+$('autoStartNo').oninput = invalidateAutoPreview; $('autoPackageCount').oninput = invalidateAutoPreview;
+$('backupBtn').onclick = openBackups; $('closeBackupDialog').onclick = () => $('backupDialog').close(); $('closeBackupButton').onclick = () => $('backupDialog').close();
 $('closeRatioDialog').onclick = () => $('ratioDialog').close(); $('newRatioBtn').onclick = () => startRatioEdit();
 $('cancelRatioEdit').onclick = () => { $('ratioEditor').hidden = true; }; $('addRatioSku').onclick = addRatioSku; $('saveRatio').onclick = saveRatio;
 $('exportBtn').onclick = event => { if (!state.data) { event.preventDefault(); toast('请先选择批次',true); return; } toast(`已开始下载：${$('exportBtn').download}，请查看浏览器下载记录`); };
@@ -345,6 +421,7 @@ $('ratioSuggestions').addEventListener('pointerdown',event => { const option = e
 $('ratioItemRows').addEventListener('input',event => { if (event.target.matches('[data-ratio-item-index]')) syncRatioItemQuantities(); });
 $('ratioSkuQty').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); addRatioSku(); } };
 $('packageNo').oninput = updateCloneHint; $('cloneCount').oninput = updateCloneHint;
+for (const id of ['lengthCm','widthCm','heightCm']) $(id).addEventListener('input',updateVolume);
 $('packageNo').onblur = event => {
   const match = String(event.target.value).match(/^\s*(\d+)\s*#?\s*$/); if (!match) { if (event.target.value) toast('大包号只需输入大于0的数字',true); return; }
   const number = Number(match[1]); if (number < 1) { toast('大包号必须大于0',true); return; }
