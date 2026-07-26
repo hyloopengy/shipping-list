@@ -81,6 +81,7 @@ class PackingFlowTest(unittest.TestCase):
         self.assertEqual(book["发货清单"]["F2"].value, 37.5)
         self.assertEqual(book["发货清单"]["I5"].value, "体积(m³)")
         self.assertEqual(book["发货清单"]["I6"].value, 0.06)
+        self.assertEqual(book["发货清单"]["I6"].number_format, "0.0000")
         self.assertEqual(book["发货清单"]["H2"].value, 0.18)
 
         latest = forced.get_json()["data"]

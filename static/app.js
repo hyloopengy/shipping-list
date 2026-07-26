@@ -58,13 +58,13 @@ function packageMeasureHtml(packageRow) {
   const dimensions = [['长',packageRow.length_cm],['宽',packageRow.width_cm],['高',packageRow.height_cm]]
     .map(([label,value]) => value == null ? `<span class="missing">${label}未填</span>` : `${label}${value}cm`).join(' · ');
   const weight = packageRow.weight_kg == null ? '<span class="missing">体重未填</span>' : `${Number(packageRow.weight_kg).toFixed(2)}kg`;
-  const volume = packageRow.volume_m3 == null ? '<span class="missing">体积未算</span>' : `体积${Number(packageRow.volume_m3).toFixed(6)}m³`;
+  const volume = packageRow.volume_m3 == null ? '<span class="missing">体积未算</span>' : `体积${Number(packageRow.volume_m3).toFixed(4)}m³`;
   return `${dimensions} · ${weight} · ${volume}`;
 }
 
 function updateVolume() {
   const values = ['lengthCm','widthCm','heightCm'].map(id => Number($(id).value));
-  $('volumeM3').value = values.every(value => value > 0) ? (values.reduce((total,value) => total * value,1) / 1000000).toFixed(6) : '';
+  $('volumeM3').value = values.every(value => value > 0) ? (values.reduce((total,value) => total * value,1) / 1000000).toFixed(4) : '';
 }
 function renderPackages() {
   const list = $('packageList'); $('packageHint').textContent = `${state.data.packages.length}个大包`;

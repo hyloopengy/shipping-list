@@ -337,7 +337,7 @@ def package_volume(row) -> float | None:
     values = [row[key] for key in ("length_cm", "width_cm", "height_cm")]
     if any(value is None for value in values):
         return None
-    return round(float(values[0]) * float(values[1]) * float(values[2]) / 1_000_000, 6)
+    return round(float(values[0]) * float(values[1]) * float(values[2]) / 1_000_000, 4)
 
 
 def package_dict(row) -> dict:
@@ -1136,7 +1136,7 @@ def export_batch(batch_id):
         total_weight = sum(float(p["weight_kg"]) for p in packages if p["weight_kg"] is not None)
         total_volume = sum(package_volume(p) or 0 for p in packages)
         ws.append(["批次号", batch["batch_no"], "内部单号", batch["internal_order"], "导出时间", datetime.now().strftime("%Y-%m-%d %H:%M")])
-        ws.append(["总大包数", data["summary"]["packages"], "总件数", data["summary"]["packed"], "总重量(kg)", round(total_weight, 2), "总体积(m³)", round(total_volume, 6)])
+        ws.append(["总大包数", data["summary"]["packages"], "总件数", data["summary"]["packed"], "总重量(kg)", round(total_weight, 2), "总体积(m³)", round(total_volume, 4)])
         ws.append(["原文件", batch["source_filename"]])
         ws.append([])
         has_ratios = bool(conn.execute(
@@ -1210,7 +1210,7 @@ def export_batch(batch_id):
             ws.column_dimensions[column].width = max(ws.column_dimensions[column].width or 0, width)
         volume_column = 11 if has_ratios else 9
         for row in ws.iter_rows(min_row=6, min_col=volume_column, max_col=volume_column):
-            row[0].number_format = "0.000000"
+            row[0].number_format = "0.0000"
         output = io.BytesIO()
         book.save(output)
         output.seek(0)

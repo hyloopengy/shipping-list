@@ -161,7 +161,7 @@ test('长宽高自动计算体积，自动配比先预览再确认生成', async
     const input = window.document.getElementById(id); input.value = value;
     input.dispatchEvent(new window.Event('input', { bubbles:true }));
   }
-  assert.equal(window.document.getElementById('volumeM3').value, '0.060000');
+  assert.equal(window.document.getElementById('volumeM3').value, '0.0600');
   window.document.getElementById('heightCm').value = '';
   window.document.getElementById('heightCm').dispatchEvent(new window.Event('input', { bubbles:true }));
   assert.equal(window.document.getElementById('volumeM3').value, '');
