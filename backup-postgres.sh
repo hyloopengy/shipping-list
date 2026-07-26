@@ -4,6 +4,9 @@ set -eu
 cd "$(dirname "$0")"
 umask 077
 mkdir -p backups
+# The app container mounts this directory read-only and runs as an
+# unprivileged user, so directory traversal and file reads must be allowed.
+chmod 755 backups
 stamp=$(date +%Y%m%d-%H%M%S)
 target="backups/packing-$stamp.sql.gz"
 temp="backups/packing-$stamp.sql.tmp"
@@ -17,5 +20,6 @@ else
 fi
 test -s "$temp"
 gzip -c "$temp" > "$target"
+chmod 644 "$target"
 find backups -type f -name 'packing-*.sql.gz' -mtime +6 -delete
 echo "备份完成：$target"
